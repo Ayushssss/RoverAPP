@@ -1,15 +1,27 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import type { Server as HttpServer } from 'http';
 
-const ESP32_PORT = parseInt(process.env.ESP32_WS_PORT || '3001', 10);
+const ESP32_PATH = '/ws/esp32';
 const espClients = new Map<string, { ws: WebSocket; ip: string }>();
 
 export function getESP32Ip(macAddress: string): string | null {
   return espClients.get(macAddress)?.ip ?? null;
 }
 
-export function startESP32WebSocket() {
-  const wss = new WebSocketServer({ port: ESP32_PORT });
-  console.log(`ESP32 WebSocket server on port ${ESP32_PORT}`);
+export function startESP32WebSocket(server: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url === ESP32_PATH) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  console.log(`ESP32 WebSocket ready on ${ESP32_PATH}`);
 
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress?.replace(/^::ffff:/, '') || '0.0.0.0';
