@@ -7,13 +7,18 @@ export async function connectSocket(token?: string): Promise<Socket> {
   if (socket?.connected) return socket;
   socket = io(WS_URL, {
     auth: { token: token ?? '' },
-    transports: ['websocket'],
-    timeout: 5000,
+    transports: ['polling', 'websocket'],
+    timeout: 10000,
   });
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('Connection timeout')), 5000);
-    socket!.on('connect', () => { clearTimeout(t); resolve(socket!); });
-    socket!.on('connect_error', (e) => { clearTimeout(t); reject(e); });
+    socket!.on('connect_error', (e) => {
+      console.warn('Socket connect_error:', e.message);
+      reject(e);
+    });
+    socket!.on('connect', () => resolve(socket!));
+    setTimeout(() => {
+      if (!socket?.connected) reject(new Error('Connection timeout'));
+    }, 10000);
   });
 }
 
