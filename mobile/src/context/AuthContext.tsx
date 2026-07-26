@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useAuth as useClerkAuth, useUser as useClerkUser, useSignUp, useSignIn } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setUserId, registerUser } from '../services/api';
@@ -10,7 +10,8 @@ interface AuthContextType {
   loading: boolean;
   signup: (email: string, password: string, name: string) => Promise<{ needsVerification: true } | void>;
   verifyEmail: (code: string) => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void | { needsSecondFactor: boolean }>;
+  verifySecondFactor: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   sendVerification: () => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
@@ -28,6 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const secondFactorRef = useRef<{ signIn: any; strategy: string } | null>(null);
 
   useEffect(() => {
     if (!authLoaded || !userLoaded) return;
@@ -112,11 +114,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (factorResult.status === 'needs_second_factor') {
+        const emailStrategy = factorResult.supportedSecondFactors?.find((f: any) => f.strategy === 'email_code');
+        if (emailStrategy) {
+          await signIn.prepareSecondFactor({ strategy: 'email_code' });
+          secondFactorRef.current = { signIn, strategy: 'email_code' };
+          return { needsSecondFactor: true };
+        }
         const strategies = factorResult.supportedSecondFactors?.map((f: any) => f.strategy).join(', ') || 'none';
-        throw new Error(
-          `Additional verification required. Available methods: ${strategies}. ` +
-          'Check Clerk Dashboard → User & Authentication → Multi-factor settings.'
-        );
+        throw new Error(`Additional verification required. Available: ${strategies}`);
       }
       throw new Error(`Sign in incomplete (status: ${factorResult.status})`);
     } catch (e: any) {
@@ -132,6 +137,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.removeItem('cached_user');
     setUserId(null);
     setUser(null);
+  };
+
+  const verifySecondFactor = async (code: string) => {
+    const ref = secondFactorRef.current;
+    if (!ref) throw new Error('No pending verification');
+    try {
+      const result = await ref.signIn.attemptSecondFactor({ strategy: ref.strategy, code });
+      if (result.status === 'complete') {
+        secondFactorRef.current = null;
+        await setActiveSignIn({ session: result.createdSessionId });
+      } else {
+        throw new Error('Verification failed');
+      }
+    } catch (e: any) {
+      throw new Error(e.errors?.[0]?.message || 'Invalid code');
+    }
   };
 
   const sendVerification = async () => {
@@ -191,7 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signup, verifyEmail, login, logout, sendVerification, forgotPassword, verifyResetCode, resetPassword }}>
+    <AuthContext.Provider value={{ user, loading, signup, verifyEmail, login, verifySecondFactor, logout, sendVerification, forgotPassword, verifyResetCode, resetPassword }}>
       {children}
     </AuthContext.Provider>
   );

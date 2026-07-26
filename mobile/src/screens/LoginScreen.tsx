@@ -44,13 +44,15 @@ function InputField({ label, value, onChangeText, placeholder, secureTextEntry, 
 
 export default function LoginScreen() {
   const nav = useNavigation<Nav>();
-  const { login } = useAuth();
+  const { login, verifySecondFactor } = useAuth();
   const { theme } = useTheme();
   const { height: winH } = useWindowDimensions();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [code, setCode] = useState('');
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -68,9 +70,22 @@ export default function LoginScreen() {
     if (!email || !password) { Alert.alert('', 'Email and password required'); return; }
     setLoading(true);
     try {
-      await login(email, password);
+      const result = await login(email, password);
+      if (result && 'needsSecondFactor' in result) {
+        setNeedsCode(true);
+      }
     } catch (e: any) {
       Alert.alert('Sign in failed', e.message || 'Please try again');
+    } finally { setLoading(false); }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!code) return;
+    setLoading(true);
+    try {
+      await verifySecondFactor(code);
+    } catch (e: any) {
+      Alert.alert('Verification failed', e.message || 'Invalid code');
     } finally { setLoading(false); }
   };
 
@@ -107,9 +122,15 @@ export default function LoginScreen() {
           </View>
         </View>
 
-        <TouchableOpacity style={{ marginTop: 28, borderRadius: 16, overflow: 'hidden' }} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
+        {needsCode && (
+          <View style={{ marginTop: 14 }}>
+            <InputField label="Verification code" value={code} onChangeText={setCode} placeholder="Enter code sent to your email" keyboardType="number-pad" theme={theme} />
+          </View>
+        )}
+
+        <TouchableOpacity style={{ marginTop: 28, borderRadius: 16, overflow: 'hidden' }} onPress={needsCode ? handleVerifyCode : handleLogin} disabled={loading} activeOpacity={0.85}>
           <LinearGradient colors={[theme.primary, theme.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ paddingVertical: 16, alignItems: 'center', borderRadius: 16 }}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: 0.3 }}>Sign in</Text>}
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: 0.3 }}>{needsCode ? 'Verify' : 'Sign in'}</Text>}
           </LinearGradient>
         </TouchableOpacity>
 
