@@ -1,7 +1,7 @@
 import { API_URL } from '../config';
 import { Alert, Platform, Linking } from 'react-native';
 
-const LOCAL_VERSION = '1.0.1';
+const LOCAL_VERSION = '1.0.1'; // must match app.json "version"
 
 function parse(v: string): number[] {
   return v.split('.').map(Number);
