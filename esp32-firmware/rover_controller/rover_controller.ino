@@ -4,6 +4,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 
@@ -20,6 +21,7 @@ const char* WS_PATH = "/ws/esp32";
 #define LED_BUILTIN 2     // Built-in LED on most ESP32 dev boards
 
 WebSocketsClient ws;
+WiFiClientSecure wsClient;
 bool ledState = false;
 
 // ── WebSocket event handler ──
@@ -85,7 +87,8 @@ void setup() {
   Serial.printf("Connecting to WebSocket: wss://%s%s\n", WS_HOST, WS_PATH);
 
   // ── Connect WebSocket ──
-  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+  wsClient.setInsecure();
+  ws.begin(wsClient, WS_HOST, WS_PORT, WS_PATH);
   ws.onEvent(webSocketEvent);
   ws.setReconnectInterval(2000);
 }

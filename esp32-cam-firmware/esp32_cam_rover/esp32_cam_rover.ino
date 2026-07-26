@@ -5,6 +5,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include "esp_camera.h"
@@ -43,6 +44,7 @@ const int HTTP_PORT = 81;
 
 // ── Globals ──
 WebSocketsClient ws;
+WiFiClientSecure wsClient;
 bool flashState = false;
 int motorLeft = 0;
 int motorRight = 0;
@@ -233,7 +235,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void setupWebSocket() {
-  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+  wsClient.setInsecure();
+  ws.begin(wsClient, WS_HOST, WS_PORT, WS_PATH);
   ws.onEvent(webSocketEvent);
   ws.setReconnectInterval(2000);
 }
