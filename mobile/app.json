@@ -34,8 +34,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-updates"
     ],
+    "updates": {
+      "url": "https://u.expo.dev/3eb1cfec-255d-4ecb-89d4-37dc762d9cff"
+    },
+    "runtimeVersion": "1.0.0",
     "extra": {
       "eas": {
         "projectId": "3eb1cfec-255d-4ecb-89d4-37dc762d9cff"
