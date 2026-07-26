@@ -26,11 +26,13 @@ export function setupWebSocket(io: SocketIOServer) {
     });
 
     socket.on('control', (data: { macAddress: string; command: string; value: number }) => {
+      console.log(`control event: ${data.command} -> ${data.macAddress}`);
       io.to(`device:${data.macAddress}`).emit('command', { command: data.command, value: data.value });
       sendToESP32(data.macAddress, { type: 'command', command: data.command, value: data.value });
     });
 
     socket.on('joystick', (data: { macAddress: string; x: number; y: number }) => {
+      console.log(`joystick event: (${data.x},${data.y}) -> ${data.macAddress}`);
       const payload = { x: Math.round(data.x * 100) / 100, y: Math.round(data.y * 100) / 100 };
       io.to(`device:${data.macAddress}`).emit('joystick', payload);
       sendToESP32(data.macAddress, { type: 'joystick', ...payload });
