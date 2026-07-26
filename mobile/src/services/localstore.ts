@@ -1,11 +1,17 @@
 import * as FileSystem from 'expo-file-system';
 
-const docDir = FileSystem.documentDirectory;
-if (!docDir) throw new Error('FileSystem not available');
-const BASE = `${docDir}AgriverseROVER/`;
-const DEVICES_DIR = `${BASE}devices/`;
-const CLUSTERS_DIR = `${BASE}clusters/`;
-const INDEX_FILE = `${BASE}index.json`;
+let BASE: string | null = null;
+const DEVICES_DIR = () => `${baseDir()}devices/`;
+const CLUSTERS_DIR = () => `${baseDir()}clusters/`;
+const INDEX_FILE = () => `${baseDir()}index.json`;
+
+function baseDir(): string {
+  if (BASE) return BASE;
+  const docDir = FileSystem.documentDirectory;
+  if (!docDir) throw new Error('FileSystem.documentDirectory is null/undefined');
+  BASE = `${docDir}AgriverseROVER/`;
+  return BASE;
+}
 
 interface StoreIndex {
   devices: string[];
@@ -13,7 +19,7 @@ interface StoreIndex {
 }
 
 async function ensureDirs(): Promise<void> {
-  for (const dir of [BASE, DEVICES_DIR, CLUSTERS_DIR]) {
+  for (const dir of [baseDir(), DEVICES_DIR(), CLUSTERS_DIR()]) {
     const info = await FileSystem.getInfoAsync(dir);
     if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
   }
@@ -21,7 +27,7 @@ async function ensureDirs(): Promise<void> {
 
 async function readIndex(): Promise<StoreIndex> {
   try {
-    const raw = await FileSystem.readAsStringAsync(INDEX_FILE);
+    const raw = await FileSystem.readAsStringAsync(INDEX_FILE());
     return JSON.parse(raw);
   } catch {
     return { devices: [], clusters: [] };
@@ -29,7 +35,7 @@ async function readIndex(): Promise<StoreIndex> {
 }
 
 async function writeIndex(idx: StoreIndex): Promise<void> {
-  await FileSystem.writeAsStringAsync(INDEX_FILE, JSON.stringify(idx));
+  await FileSystem.writeAsStringAsync(INDEX_FILE(), JSON.stringify(idx));
 }
 
 function sanitizeId(id: string): string {
@@ -43,7 +49,7 @@ export async function initStore(): Promise<void> {
 export async function saveDevice(device: { id: string; name: string; mac_address: string; cluster_id: string | null; created_at: string }): Promise<void> {
   await ensureDirs();
   const idx = await readIndex();
-  const path = `${DEVICES_DIR}${sanitizeId(device.id)}.json`;
+  const path = `${DEVICES_DIR()}${sanitizeId(device.id)}.json`;
 
   if (!idx.devices.includes(device.id)) {
     idx.devices.unshift(device.id);
@@ -62,7 +68,7 @@ export async function saveDevice(device: { id: string; name: string; mac_address
 export async function removeDevice(id: string): Promise<void> {
   await ensureDirs();
   const idx = await readIndex();
-  const path = `${DEVICES_DIR}${sanitizeId(id)}.json`;
+  const path = `${DEVICES_DIR()}${sanitizeId(id)}.json`;
 
   idx.devices = idx.devices.filter(d => d !== id);
 
@@ -76,7 +82,7 @@ export async function listDevices(): Promise<any[]> {
   await ensureDirs();
   const idx = await readIndex();
   const results = await Promise.allSettled(
-    idx.devices.map(id => FileSystem.readAsStringAsync(`${DEVICES_DIR}${sanitizeId(id)}.json`))
+    idx.devices.map(id => FileSystem.readAsStringAsync(`${DEVICES_DIR()}${sanitizeId(id)}.json`))
   );
   return results
     .filter(r => r.status === 'fulfilled')
@@ -86,7 +92,7 @@ export async function listDevices(): Promise<any[]> {
 export async function saveCluster(cluster: { id: string; name: string; description: string; created_at: string }): Promise<void> {
   await ensureDirs();
   const idx = await readIndex();
-  const path = `${CLUSTERS_DIR}${sanitizeId(cluster.id)}.json`;
+  const path = `${CLUSTERS_DIR()}${sanitizeId(cluster.id)}.json`;
 
   if (!idx.clusters.includes(cluster.id)) {
     idx.clusters.unshift(cluster.id);
@@ -102,7 +108,7 @@ export async function listClusters(): Promise<any[]> {
   await ensureDirs();
   const idx = await readIndex();
   const results = await Promise.allSettled(
-    idx.clusters.map(id => FileSystem.readAsStringAsync(`${CLUSTERS_DIR}${sanitizeId(id)}.json`))
+    idx.clusters.map(id => FileSystem.readAsStringAsync(`${CLUSTERS_DIR()}${sanitizeId(id)}.json`))
   );
   return results
     .filter(r => r.status === 'fulfilled')
@@ -111,6 +117,6 @@ export async function listClusters(): Promise<any[]> {
 
 export async function clearAll(): Promise<void> {
   try {
-    await FileSystem.deleteAsync(BASE, { idempotent: true });
+    await FileSystem.deleteAsync(baseDir(), { idempotent: true });
   } catch {}
 }
