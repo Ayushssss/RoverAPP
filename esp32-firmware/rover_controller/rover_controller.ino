@@ -12,8 +12,9 @@ const char* WIFI_SSID = "ANANYA";
 const char* WIFI_PASS = "satish.m";
 
 // ── Server ──
-const char* WS_HOST = "192.168.0.102";
-const int WS_PORT = 3001;
+const char* WS_HOST = "roverapp-api.onrender.com";
+const int WS_PORT = 443;
+const char* WS_PATH = "/ws/esp32";
 
 // ── Pins ──
 #define LED_BUILTIN 2     // Built-in LED on most ESP32 dev boards
@@ -81,10 +82,10 @@ void setup() {
     Serial.print(".");
   }
   Serial.printf("\nWiFi connected — MAC: %s\n", WiFi.macAddress().c_str());
-  Serial.printf("Connecting to WebSocket: %s:%d\n", WS_HOST, WS_PORT);
+  Serial.printf("Connecting to WebSocket: wss://%s%s\n", WS_HOST, WS_PATH);
 
   // ── Connect WebSocket ──
-  ws.begin(WS_HOST, WS_PORT, "/");
+  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
   ws.onEvent(webSocketEvent);
   ws.setReconnectInterval(2000);
 }

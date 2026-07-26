@@ -15,8 +15,9 @@ const char* WIFI_SSID = "ANANYA";
 const char* WIFI_PASS = "satish.m";
 
 // ── Server ──
-const char* WS_HOST = "192.168.0.102";
-const int WS_PORT = 3001;
+const char* WS_HOST = "roverapp-api.onrender.com";
+const int WS_PORT = 443;
+const char* WS_PATH = "/ws/esp32";
 const int HTTP_PORT = 81;
 
 // ── Pins ──
@@ -232,7 +233,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void setupWebSocket() {
-  ws.begin(WS_HOST, WS_PORT, "/");
+  ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
   ws.onEvent(webSocketEvent);
   ws.setReconnectInterval(2000);
 }
