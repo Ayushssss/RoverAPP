@@ -48,13 +48,13 @@ export default function ControlScreen() {
       Animated.timing(pulseAnim, { toValue: 0.3, duration: 1500, useNativeDriver: Platform.OS !== 'web' }),
       Animated.timing(pulseAnim, { toValue: 1, duration: 1500, useNativeDriver: Platform.OS !== 'web' }),
     ]));
-    if (!connected) pulse.start();
+    pulse.start();
     return () => {
       isMounted = false;
       disconnectSocket();
       pulse.stop();
     };
-  }, [macAddress, connected]);
+  }, [macAddress]);
 
   const handleMove = useCallback((x: number, y: number) => {
     setCoords({ x, y });

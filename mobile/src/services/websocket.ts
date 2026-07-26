@@ -29,18 +29,19 @@ export function disconnectSocket() {
 }
 
 export function registerDevice(macAddress: string, onIp?: (ip: string) => void) {
-  socket?.emit('register-device', macAddress);
+  if (!socket?.connected) return;
+  socket.emit('register-device', macAddress);
   if (onIp) {
-    socket?.once('device-ip', (data: { macAddress: string; ip: string }) => {
+    socket.once('device-ip', (data: { macAddress: string; ip: string }) => {
       if (data.macAddress === macAddress) onIp(data.ip);
     });
   }
 }
 
 export function sendJoystick(macAddress: string, x: number, y: number) {
-  socket?.emit('joystick', { macAddress, x, y });
+  if (socket?.connected) socket.emit('joystick', { macAddress, x, y });
 }
 
 export function sendCommand(macAddress: string, command: string, value: number) {
-  socket?.emit('control', { macAddress, command, value });
+  if (socket?.connected) socket.emit('control', { macAddress, command, value });
 }
