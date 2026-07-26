@@ -23,6 +23,13 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Latest app version — increment on each build
+const APP_VERSION = { latest: '1.0.1', minRequired: '1.0.1' };
+app.get('/api/version', (_req, res) => {
+  res.json(APP_VERSION);
+});
+
+
 app.use('/api/users', userRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/clusters', clusterRoutes);

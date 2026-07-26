@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
 import { useTheme, ThemeProvider } from '../context/ThemeContext';
+import { checkVersion } from '../services/version';
 import IntroScreen from '../screens/IntroScreen';
 import SignupScreen from '../screens/SignupScreen';
 import LoginScreen from '../screens/LoginScreen';
@@ -123,6 +124,10 @@ function MainTabs() {
 function AppContent() {
   const { user, loading } = useAuth();
   const { theme } = useTheme();
+
+  useEffect(() => {
+    if (!loading) checkVersion();
+  }, [loading]);
 
   if (loading) {
     return (
