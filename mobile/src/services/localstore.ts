@@ -1,6 +1,8 @@
 import * as FileSystem from 'expo-file-system';
 
-const BASE = `${FileSystem.documentDirectory}AgriverseROVER/`;
+const docDir = FileSystem.documentDirectory;
+if (!docDir) throw new Error('FileSystem not available');
+const BASE = `${docDir}AgriverseROVER/`;
 const DEVICES_DIR = `${BASE}devices/`;
 const CLUSTERS_DIR = `${BASE}clusters/`;
 const INDEX_FILE = `${BASE}index.json`;

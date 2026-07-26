@@ -22,7 +22,7 @@ export default function ClustersScreen() {
   const create = async () => {
     if (!newName.trim()) { Alert.alert('', 'Name required'); return; }
     try { await clustersApi.create({ name: newName.trim(), description: newDesc.trim() }); setModalVisible(false); setNewName(''); setNewDesc(''); load();
-    } catch (e: any) { Alert.alert('', e.response?.data?.error || 'Failed'); }
+    } catch (e: any) { Alert.alert('Error', e?.message || e?.response?.data?.error || 'Failed'); }
   };
 
   return (

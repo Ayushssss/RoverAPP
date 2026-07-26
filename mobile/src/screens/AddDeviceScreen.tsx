@@ -28,7 +28,7 @@ export default function AddDeviceScreen() {
     try {
       await devicesApi.add({ name: name.trim(), macAddress: mac });
       Alert.alert('', `${name} added`, [{ text: 'OK', onPress: () => nav.goBack() }]);
-    } catch (e: any) { Alert.alert('', e.response?.data?.error || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { Alert.alert('Error', e?.message || e?.response?.data?.error || 'Failed to save device'); } finally { setLoading(false); }
   };
 
   return (
