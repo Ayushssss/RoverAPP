@@ -1,5 +1,5 @@
 import { API_URL } from '../config';
-import { Alert, Platform, Linking } from 'react-native';
+import { Alert, Linking } from 'react-native';
 
 const LOCAL_VERSION = '1.0.1'; // must match app.json "version"
 
@@ -23,18 +23,14 @@ export async function checkVersion(): Promise<void> {
   try {
     const res = await fetch(`${API_URL}/api/version`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) return;
-    const { latest, minRequired } = await res.json();
+    const { latest, minRequired, apkUrl } = await res.json();
+    const downloadUrl = apkUrl || `${API_URL}/downloads/AgriverseROVER-v${latest}.apk`;
 
     if (isOlder(LOCAL_VERSION, minRequired)) {
       Alert.alert(
         'Update required',
-        'Please update the app to continue.',
-        [{ text: 'Update', onPress: () => {
-          const url = Platform.OS === 'android'
-            ? 'https://play.google.com/store/apps/details?id=agriverse.com'
-            : 'https://apps.apple.com/app/id...';
-          Linking.openURL(url);
-        }}],
+        'A new version is required to continue.',
+        [{ text: 'Download', onPress: () => Linking.openURL(downloadUrl) }],
         { cancelable: false }
       );
       return;
@@ -43,15 +39,10 @@ export async function checkVersion(): Promise<void> {
     if (isOlder(LOCAL_VERSION, latest)) {
       Alert.alert(
         'Update available',
-        'A new version is available. Would you like to update?',
+        'A new version is available. Download now?',
         [
           { text: 'Later', style: 'cancel' },
-          { text: 'Update', onPress: () => {
-            const url = Platform.OS === 'android'
-              ? 'https://play.google.com/store/apps/details?id=agriverse.com'
-              : 'https://apps.apple.com/app/id...';
-            Linking.openURL(url);
-          }},
+          { text: 'Download', onPress: () => Linking.openURL(downloadUrl) },
         ]
       );
     }

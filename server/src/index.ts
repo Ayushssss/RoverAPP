@@ -24,7 +24,12 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Latest app version — increment on each build
-const APP_VERSION = { latest: '1.0.1', minRequired: '1.0.1' };
+// Latest app version — increment on each build
+const APP_VERSION = {
+  latest: '1.0.1',
+  minRequired: '1.0.1',
+  apkUrl: 'https://roverapp.onrender.com/downloads/AgriverseROVER-v1.0.1.apk',
+};
 app.get('/api/version', (_req, res) => {
   res.json(APP_VERSION);
 });
@@ -33,6 +38,9 @@ app.get('/api/version', (_req, res) => {
 app.use('/api/users', userRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/clusters', clusterRoutes);
+
+// Serve APK downloads
+app.use('/downloads', express.static('downloads'));
 
 setupWebSocket(io);
 startESP32WebSocket(server);
