@@ -112,9 +112,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (factorResult.status === 'needs_second_factor') {
+        const strategies = factorResult.supportedSecondFactors?.map((f: any) => f.strategy).join(', ') || 'none';
         throw new Error(
-          'Two-factor authentication is required for this account. ' +
-          'Please disable 2FA in your Clerk Dashboard (User & Authentication → Multi-factor) to sign in with this app.'
+          `Additional verification required. Available methods: ${strategies}. ` +
+          'Check Clerk Dashboard → User & Authentication → Multi-factor settings.'
         );
       }
       throw new Error(`Sign in incomplete (status: ${factorResult.status})`);
