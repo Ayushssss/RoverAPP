@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '../config';
+import * as local from './localstore';
 
 let _userId: string | null = null;
 
@@ -12,8 +12,6 @@ function uid(): string {
   return _userId;
 }
 
-function cacheKey(type: string) { return `${type}_${uid()}`; }
-
 export async function registerUser(clerkId: string, email: string, name: string): Promise<void> {
   try {
     await fetch(`${API_URL}/api/users`, {
@@ -21,9 +19,7 @@ export async function registerUser(clerkId: string, email: string, name: string)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clerkId, email, name }),
     });
-  } catch (e) {
-    console.warn('registerUser: server unreachable', e);
-  }
+  } catch { console.warn('registerUser: server unreachable'); }
 }
 
 export interface Device {
@@ -41,127 +37,102 @@ export interface Cluster {
   created_at: string;
 }
 
-async function uidSafe(): Promise<string | null> {
-  try { return uid(); } catch { return null; }
+function genId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-async function loadLocal<T>(key: string): Promise<T[]> {
+function deviceToLocal(d: any): Device {
+  return { id: d.id, name: d.name, mac_address: d.mac_address || d.macAddress, cluster_id: d.cluster_id ?? d.clusterId ?? null, created_at: d.created_at || d.createdAt || new Date().toISOString() };
+}
+
+function clusterToLocal(c: any): Cluster {
+  return { id: c.id, name: c.name, description: c.description, created_at: c.created_at || c.createdAt || new Date().toISOString() };
+}
+
+async function syncDevices(): Promise<void> {
+  const id = _userId;
+  if (!id) return;
   try {
-    const raw = await AsyncStorage.getItem(key);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+    const res = await fetch(`${API_URL}/api/devices?userId=${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      for (const d of data) await local.saveDevice(deviceToLocal(d));
+    }
+  } catch { console.warn('syncDevices: server unreachable'); }
 }
 
-async function saveLocal<T>(key: string, data: T[]): Promise<void> {
-  try { await AsyncStorage.setItem(key, JSON.stringify(data)); } catch {}
+async function syncClusters(): Promise<void> {
+  const id = _userId;
+  if (!id) return;
+  try {
+    const res = await fetch(`${API_URL}/api/clusters?userId=${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      for (const c of data) await local.saveCluster(clusterToLocal(c));
+    }
+  } catch { console.warn('syncClusters: server unreachable'); }
 }
 
 export const devices = {
   list: async (): Promise<Device[]> => {
-    const id = await uidSafe();
-    if (id) {
-      try {
-        const res = await fetch(`${API_URL}/api/devices?userId=${id}`);
-        if (res.ok) {
-          const data = await res.json();
-          await saveLocal(cacheKey('devices'), data);
-          return data;
-        }
-      } catch (e) { console.warn('devices.list: server unreachable, using cache', e); }
-    }
-    return loadLocal(cacheKey('devices'));
+    const data = await local.listDevices();
+    if (data.length === 0) await syncDevices();
+    return data.length > 0 ? data : local.listDevices();
   },
 
   add: async (data: { name: string; macAddress: string; clusterId?: string }): Promise<Device> => {
-    const id = await uidSafe();
-    if (id) {
-      try {
-        const res = await fetch(`${API_URL}/api/devices`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: id, name: data.name, macAddress: data.macAddress, clusterId: data.clusterId ?? null }),
-        });
-        if (res.ok) {
-          const device = await res.json();
-          const list = await devices.list();
-          list.unshift(device);
-          await saveLocal(cacheKey('devices'), list);
-          return device;
-        }
-      } catch (e) { console.warn('devices.add: server unreachable, saving locally', e); }
-    }
     const device: Device = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-      name: data.name,
-      mac_address: data.macAddress,
-      cluster_id: data.clusterId ?? null,
-      created_at: new Date().toISOString(),
+      id: genId(), name: data.name, mac_address: data.macAddress,
+      cluster_id: data.clusterId ?? null, created_at: new Date().toISOString(),
     };
-    const list = await loadLocal(cacheKey('devices'));
-    list.unshift(device);
-    await saveLocal(cacheKey('devices'), list);
+    await local.saveDevice(device);
+
+    const id = _userId;
+    if (id) {
+      fetch(`${API_URL}/api/devices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: id, name: data.name, macAddress: data.macAddress, clusterId: data.clusterId ?? null }),
+      }).catch(() => {});
+    }
     return device;
   },
 
   remove: async (roverId: string): Promise<void> => {
-    const id = await uidSafe();
+    await local.removeDevice(roverId);
+    const id = _userId;
     if (id) {
-      try { await fetch(`${API_URL}/api/devices/${roverId}?userId=${id}`, { method: 'DELETE' }); }
-      catch { console.warn('devices.remove: server unreachable'); }
+      fetch(`${API_URL}/api/devices/${roverId}?userId=${id}`, { method: 'DELETE' }).catch(() => {});
     }
-    const list = await loadLocal(cacheKey('devices'));
-    await saveLocal(cacheKey('devices'), list.filter(d => d.id !== roverId));
   },
 
   get: async (roverId: string): Promise<Device | undefined> => {
-    const list = await devices.list();
+    const list = await local.listDevices();
     return list.find(d => d.id === roverId);
   },
 };
 
 export const clusters = {
   list: async (): Promise<Cluster[]> => {
-    const id = await uidSafe();
-    if (id) {
-      try {
-        const res = await fetch(`${API_URL}/api/clusters?userId=${id}`);
-        if (res.ok) {
-          const data = await res.json();
-          await saveLocal(cacheKey('clusters'), data);
-          return data;
-        }
-      } catch (e) { console.warn('clusters.list: server unreachable, using cache', e); }
-    }
-    return loadLocal(cacheKey('clusters'));
+    const data = await local.listClusters();
+    if (data.length === 0) await syncClusters();
+    return data.length > 0 ? data : local.listClusters();
   },
 
   create: async (data: { name: string; description: string }): Promise<Cluster> => {
-    const id = await uidSafe();
-    if (id) {
-      try {
-        const res = await fetch(`${API_URL}/api/clusters`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: id, name: data.name, description: data.description }),
-        });
-        if (res.ok) {
-          const cluster = await res.json();
-          const list = await clusters.list();
-          list.unshift(cluster);
-          await saveLocal(cacheKey('clusters'), list);
-          return cluster;
-        }
-      } catch (e) { console.warn('clusters.create: server unreachable, saving locally', e); }
-    }
     const cluster: Cluster = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-      name: data.name,
-      description: data.description,
-      created_at: new Date().toISOString(),
+      id: genId(), name: data.name, description: data.description, created_at: new Date().toISOString(),
     };
-    const list = await loadLocal(cacheKey('clusters'));
-    list.unshift(cluster);
-    await saveLocal(cacheKey('clusters'), list);
+    await local.saveCluster(cluster);
+
+    const id = _userId;
+    if (id) {
+      fetch(`${API_URL}/api/clusters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: id, name: data.name, description: data.description }),
+      }).catch(() => {});
+    }
     return cluster;
   },
 };

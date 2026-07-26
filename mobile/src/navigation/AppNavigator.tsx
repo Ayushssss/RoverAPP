@@ -126,7 +126,10 @@ function AppContent() {
   const { theme } = useTheme();
 
   useEffect(() => {
-    if (!loading) checkVersion();
+    if (!loading) {
+      import('../services/localstore').then(m => m.initStore());
+      checkVersion();
+    }
   }, [loading]);
 
   if (loading) {
