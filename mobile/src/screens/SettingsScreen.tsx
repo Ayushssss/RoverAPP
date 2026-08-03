@@ -1,10 +1,79 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '../context/ThemeContext';
-import DropdownMenu from '../components/DropdownMenu';
+import { View, Text, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTheme, SCHEME_LIST } from '../context/ThemeContext';
+import DropdownMenu from '../components/DropdownMenu';
 import { Skeleton } from '../components/Skeleton';
+import { haptics } from '../haptics';
+import { rem, spacing, radii, type } from '../theme';
+import { TabHeader, Card, ListRow, Toggle, FadeIn, Press } from '../components/ui';
+
+type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+
+interface Item {
+  icon: IconName;
+  label: string;
+  value?: string;
+  toggle?: boolean;
+}
+
+function SchemePicker() {
+  const { theme, schemeId, setScheme } = useTheme();
+
+  return (
+    <View style={{ gap: rem(spacing.md) }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: rem(spacing.sm), paddingVertical: 2 }}
+      >
+        {SCHEME_LIST.map((s) => {
+          const on = schemeId === s.id;
+          return (
+            <Press
+              key={s.id}
+              label={`${s.name} colour scheme`}
+              onPress={() => { haptics.selection(); setScheme(s.id); }}
+            >
+              <View
+                style={{
+                  width: rem(104),
+                  padding: rem(spacing.md),
+                  borderRadius: radii.lg,
+                  backgroundColor: theme.surface,
+                  borderWidth: on ? 2 : 1,
+                  borderColor: on ? theme.primaryTint : theme.border,
+                  gap: rem(spacing.sm),
+                }}
+              >
+                {/* Swatch reads as the scheme itself, not as a colour chip */}
+                <View style={{ flexDirection: 'row', gap: 4 }}>
+                  <View style={{ flex: 2, height: rem(26), borderRadius: 7, backgroundColor: s.swatch[0] }} />
+                  <View style={{ flex: 1, height: rem(26), borderRadius: 7, backgroundColor: s.swatch[1] }} />
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text
+                    style={{ fontSize: rem(12), fontWeight: '700', color: theme.text, flex: 1 }}
+                    numberOfLines={1}
+                  >
+                    {s.name}
+                  </Text>
+                  {on && <MaterialCommunityIcons name="check-circle" size={rem(13)} color={theme.primaryTint} />}
+                </View>
+              </View>
+            </Press>
+          );
+        })}
+      </ScrollView>
+
+      <Text style={{ ...type.caption, color: theme.textMuted }}>
+        {SCHEME_LIST.find((s) => s.id === schemeId)?.blurb}
+      </Text>
+    </View>
+  );
+}
 
 export default function SettingsScreen() {
   const { theme, isDark, toggle } = useTheme();
@@ -12,62 +81,72 @@ export default function SettingsScreen() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 600);
+    const t = setTimeout(() => setLoading(false), 450);
     return () => clearTimeout(t);
   }, []);
 
-  const sections = [
+  const sections: { title: string; items: Item[] }[] = [
     {
-      title: 'APPEARANCE',
+      title: 'Appearance',
+      items: [{ icon: isDark ? 'weather-night' : 'weather-sunny', label: 'Dark mode', toggle: true }],
+    },
+    {
+      title: 'Connection',
       items: [
-        { icon: isDark ? 'weather-night' : 'weather-sunny', label: 'Dark Mode', value: isDark, toggle: true },
+        { icon: 'wifi', label: 'WiFi networks', value: '3 saved' },
+        { icon: 'signal-cellular-outline', label: 'Cellular backup', value: 'Enabled' },
+        { icon: 'update', label: 'Auto updates', value: 'On' },
       ],
     },
     {
-      title: 'CONNECTION',
+      title: 'Data',
       items: [
-        { icon: 'wifi', label: 'WiFi Networks', value: '3 saved', toggle: false },
-        { icon: 'signal-cellular-outline', label: 'Cellular Backup', value: 'Enabled', toggle: false },
-        { icon: 'update', label: 'Auto Updates', value: 'On', toggle: false },
+        { icon: 'database-outline', label: 'Sync frequency', value: 'Real-time' },
+        { icon: 'cloud-upload-outline', label: 'Cloud backup', value: 'Daily' },
       ],
     },
     {
-      title: 'DATA',
+      title: 'Support',
       items: [
-        { icon: 'database-outline', label: 'Sync Frequency', value: 'Real-time', toggle: false },
-        { icon: 'cloud-upload-outline', label: 'Cloud Backup', value: 'Daily', toggle: false },
-      ],
-    },
-    {
-      title: 'SUPPORT',
-      items: [
-        { icon: 'file-document-outline', label: 'Terms of Service', value: undefined, toggle: false },
-        { icon: 'shield-check-outline', label: 'Privacy Policy', value: undefined, toggle: false },
+        { icon: 'file-document-outline', label: 'Terms of service' },
+        { icon: 'shield-check-outline', label: 'Privacy policy' },
       ],
     },
   ];
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      {/* Header */}
-      <View style={{ paddingTop: insets.top + 4, paddingHorizontal: 20, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: theme.border }}>
-        <Text style={{ fontSize: 26, fontWeight: '700', color: theme.text, letterSpacing: -0.5 }}>Settings</Text>
-        <DropdownMenu />
-      </View>
+      <TabHeader title="Settings" right={<DropdownMenu />} />
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 100 }}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          padding: rem(spacing.xl),
+          paddingBottom: insets.bottom + rem(96),
+        }}
+      >
         {loading ? (
-          <View style={{ gap: 24 }}>
-            {[3, 4, 3].map((count, si) => (
-              <View key={si} style={{ gap: 8 }}>
-                <Skeleton width={80} height={10} radius={5} style={{ marginLeft: 4, marginBottom: 2 }} />
-                <View style={{ backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, overflow: 'hidden' }}>
-                  {Array(count).fill(0).map((_, ii) => (
-                    <View key={ii} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: ii < count - 1 ? 1 : 0, borderBottomColor: theme.border, gap: 14 }}>
-                      <Skeleton width={36} height={36} radius={10} />
-                      <Skeleton width={130} height={13} radius={6} />
-                      <View style={{ flex: 1 }} />
-                      <Skeleton width={44} height={24} radius={12} />
+          <View style={{ gap: rem(spacing.xxl) }}>
+            {[1, 3, 2].map((count, si) => (
+              <View key={si} style={{ gap: rem(spacing.md) }}>
+                <Skeleton width={rem(90)} height={rem(10)} radius={5} />
+                <View
+                  style={{
+                    backgroundColor: theme.surface, borderRadius: radii.xl,
+                    borderWidth: 1, borderColor: theme.border, overflow: 'hidden',
+                  }}
+                >
+                  {Array.from({ length: count }, (_, ii) => (
+                    <View
+                      key={ii}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                        padding: rem(spacing.lg),
+                        borderTopWidth: ii === 0 ? 0 : 1, borderTopColor: theme.border,
+                      }}
+                    >
+                      <Skeleton width={rem(36)} height={rem(36)} radius={radii.md} />
+                      <Skeleton width="45%" height={rem(13)} radius={6} />
                     </View>
                   ))}
                 </View>
@@ -76,37 +155,54 @@ export default function SettingsScreen() {
           </View>
         ) : (
           <>
+            <FadeIn index={0} style={{ marginBottom: rem(spacing.xxl) }}>
+              <Text
+                style={{
+                  ...type.micro,
+                  color: theme.textMuted,
+                  textTransform: 'uppercase',
+                  marginBottom: rem(spacing.md),
+                  marginLeft: rem(spacing.xs),
+                }}
+              >
+                Colour scheme
+              </Text>
+              <SchemePicker />
+            </FadeIn>
+
             {sections.map((section, si) => (
-              <View key={si} style={{ marginBottom: 24 }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', color: theme.textMuted, letterSpacing: 1.5, marginBottom: 8, paddingLeft: 4 }}>{section.title}</Text>
-                <View style={{ backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, overflow: 'hidden' }}>
+              <FadeIn key={section.title} index={si} style={{ marginBottom: rem(spacing.xxl) }}>
+                <Text
+                  style={{
+                    ...type.micro,
+                    color: theme.textMuted,
+                    textTransform: 'uppercase',
+                    marginBottom: rem(spacing.md),
+                    marginLeft: rem(spacing.xs),
+                  }}
+                >
+                  {section.title}
+                </Text>
+
+                <Card padded={false}>
                   {section.items.map((item, ii) => (
-                    <TouchableOpacity
-                      key={ii}
-                      onPress={item.toggle ? toggle : undefined}
-                      style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: ii < section.items.length - 1 ? 1 : 0, borderBottomColor: theme.border }}
-                      activeOpacity={0.6}
-                    >
-                      <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: theme.border, justifyContent: 'center', alignItems: 'center', marginRight: 14 }}>
-                        <MaterialCommunityIcons name={item.icon as any} size={18} color={theme.textDim} />
-                      </View>
-                      <Text style={{ flex: 1, fontSize: 14, color: theme.text }}>{item.label}</Text>
-                      {item.toggle ? (
-                        <View style={{ width: 48, height: 26, borderRadius: 13, backgroundColor: item.value ? theme.primary : theme.textMuted, justifyContent: 'center', paddingHorizontal: 3 }}>
-                          <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', alignSelf: item.value ? 'flex-end' : 'flex-start', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 }} />
-                        </View>
-                      ) : (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                          {item.value && <Text style={{ fontSize: 12, color: theme.textDim }}>{item.value}</Text>}
-                          <MaterialCommunityIcons name="chevron-right" size={18} color={theme.textMuted} />
-                        </View>
-                      )}
-                    </TouchableOpacity>
+                    <ListRow
+                      key={item.label}
+                      icon={item.icon}
+                      label={item.label}
+                      value={item.toggle ? undefined : item.value}
+                      first={ii === 0}
+                      onPress={item.toggle ? toggle : () => {}}
+                      right={item.toggle ? <Toggle value={isDark} onChange={toggle} /> : undefined}
+                    />
                   ))}
-                </View>
-              </View>
+                </Card>
+              </FadeIn>
             ))}
-            <Text style={{ fontSize: 10, color: theme.textMuted, textAlign: 'center', marginTop: 8 }}>AgriVerse ROVER v2.4.0 · SQLite DB</Text>
+
+            <Text style={{ ...type.caption, color: theme.textMuted, textAlign: 'center' }}>
+              AgriVerse Rover · v2.4.0
+            </Text>
           </>
         )}
       </ScrollView>

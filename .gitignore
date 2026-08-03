@@ -12,3 +12,8 @@ web-build/
 coverage/
 .DS_Store
 *.log
+
+# Local agent/editor config, not part of the project
+.claude/
+# Feature removed from the build but kept on disk for reference
+.attic/

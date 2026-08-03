@@ -3,6 +3,15 @@ services:
     name: roverapp-api
     env: node
     rootDir: server
+    # Singapore is the closest Render offers to India. Without this the
+    # default is Oregon, which sends every command from the phone to the US
+    # and back to a rover on the same LAN — roughly 300ms of round trip for
+    # two devices in the same room. Singapore cuts that to well under 100ms.
+    #
+    # Render cannot move an existing service between regions. Applying this
+    # means creating a new service from this blueprint and repointing
+    # API_URL/WS_HOST in mobile/src/config.ts and the three firmware sketches.
+    region: singapore
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
@@ -14,3 +23,25 @@ services:
         generateValue: true
       - key: MONGODB_URI
         sync: false
+
+  # The Expo app built for the browser. Same codebase as the phone app —
+  # react-native-web renders it — so there is nothing separate to maintain.
+  - type: web
+    name: roverapp-web
+    env: static
+    rootDir: mobile
+    buildCommand: npm install && npx expo export --platform web
+    staticPublishPath: dist
+    # React Navigation routes in memory rather than in the URL, so the server
+    # must hand index.html to every path. Without this, a refresh on anything
+    # other than "/" is a 404 from a file that was never written to disk.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # The JS bundle is content-hashed by Expo, so it can be cached hard and
+      # a new build busts it by filename.
+      - path: /_expo/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable

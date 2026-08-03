@@ -1,75 +1,162 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { devices as devicesApi } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
+import { rem, spacing, radii, type } from '../theme';
+import { Screen, ScreenHeader, Field, Button, FadeIn } from '../components/ui';
+import { useToast } from '../components/Toast';
+import KeyboardAwareScroll from '../components/KeyboardAwareScroll';
+import { SuccessOverlay } from '../components/SuccessCheck';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'AddDevice'>;
+const MAC_LENGTH = 17;
+
+const STEPS = [
+  'Flash the rover firmware and open the serial monitor at 115200 baud.',
+  'Reset the board — the MAC prints on the first line after boot.',
+  'Copy those six byte pairs in here; the colons are added for you.',
+];
 
 export default function AddDeviceScreen() {
   const nav = useNavigation<Nav>();
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const toast = useToast();
+
   const [name, setName] = useState('');
   const [mac, setMac] = useState('');
   const [loading, setLoading] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
+  const [nameError, setNameError] = useState('');
+  const [macError, setMacError] = useState('');
+
   const formatMac = (val: string) => {
-    const cleaned = val.replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
-    const parts: string[] = [];
-    for (let i = 0; i < cleaned.length && parts.length < 6; i += 2) parts.push(cleaned.slice(i, i + 2));
-    return parts.join(':');
+    const cleaned = val.replace(/[^A-Fa-f0-9]/g, '').toUpperCase().slice(0, 12);
+    return cleaned.match(/.{1,2}/g)?.join(':') ?? '';
   };
+
+  const macComplete = mac.length === MAC_LENGTH;
+
   const handleAdd = async () => {
-    if (!name.trim()) { Alert.alert('', 'Device name required'); return; }
-    if (mac.length < 17) { Alert.alert('', 'Enter a valid MAC address'); return; }
+    setNameError('');
+    setMacError('');
+
+    if (!name.trim()) {
+      setNameError('Give this rover a name');
+      return;
+    }
+    if (!macComplete) {
+      setMacError('A MAC address is six byte pairs');
+      return;
+    }
+
     setLoading(true);
     try {
-      await devicesApi.add({ name: name.trim(), macAddress: mac });
-      Alert.alert('', `${name} added`, [{ text: 'OK', onPress: () => nav.goBack() }]);
-    } catch (e: any) { Alert.alert('Error', e?.message || e?.response?.data?.error || 'Failed to save device'); } finally { setLoading(false); }
+      const label = name.trim();
+      await devicesApi.add({ name: label, macAddress: mac });
+      toast.success(`${label} is paired and ready to drive`);
+      // The overlay plays the check and calls goBack when it finishes; under
+      // reduced motion it resolves immediately and the toast carries the news.
+      setCelebrating(true);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || e?.message || 'Could not register that rover');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => nav.goBack()} style={[styles.backBtn, { backgroundColor: theme.surface, borderColor: theme.border }]}><Text style={[styles.backArrow, { color: theme.text }]}>←</Text></TouchableOpacity>
-        <Text style={[styles.title, { color: theme.text }]}>New device</Text>
-        <View style={{ width: 40 }} />
-      </View>
-      <View style={styles.body}>
-        <View style={styles.field}>
-          <Text style={[styles.label, { color: theme.textDim }]}>Device name</Text>
-          <TextInput style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text }]} value={name} onChangeText={setName} placeholder="My Rover" placeholderTextColor={theme.textMuted} />
-        </View>
-        <View style={styles.field}>
-          <Text style={[styles.label, { color: theme.textDim }]}>MAC address</Text>
-          <TextInput style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text, fontFamily: 'monospace', letterSpacing: 1.5 }]} value={mac} onChangeText={v => setMac(formatMac(v))} placeholder="AA:BB:CC:DD:EE:FF" placeholderTextColor={theme.textMuted} maxLength={17} autoCapitalize="characters" />
-          <Text style={[styles.hint, { color: theme.textMuted }]}>Found on your ESP32 serial output at startup</Text>
-        </View>
-        <TouchableOpacity style={[styles.button]} onPress={handleAdd} disabled={loading} activeOpacity={0.9}>
-          <LinearGradient colors={[theme.primary, theme.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.buttonGrad}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Register device</Text>}
-          </LinearGradient>
-        </TouchableOpacity>
-      </View>
-    </View>
+    <Screen>
+      <ScreenHeader title="New rover" subtitle="Pair an ESP32" onBack={() => nav.goBack()} />
+
+      <KeyboardAwareScroll
+        contentContainerStyle={{
+          padding: rem(spacing.xl),
+          paddingBottom: insets.bottom + rem(spacing.xxl),
+          flexGrow: 1,
+        }}
+      >
+          <FadeIn index={0} style={{ gap: rem(18) }}>
+            <Field
+              label="Device name"
+              value={name}
+              onChangeText={(t) => { setName(t); if (nameError) setNameError(''); }}
+              placeholder="North block scout"
+              autoCapitalize="words"
+              error={nameError}
+            />
+
+            <Field
+              label="MAC address"
+              value={mac}
+              onChangeText={(v) => { setMac(formatMac(v)); if (macError) setMacError(''); }}
+              placeholder="A0:B7:65:2C:1D:E4"
+              autoCapitalize="characters"
+              maxLength={MAC_LENGTH}
+              mono
+              error={macError}
+              hint={macComplete ? undefined : `${Math.floor(mac.replace(/:/g, '').length / 2)} of 6 byte pairs`}
+              right={
+                macComplete ? (
+                  <MaterialCommunityIcons name="check-circle" size={rem(20)} color={theme.successTint} />
+                ) : null
+              }
+            />
+          </FadeIn>
+
+          <FadeIn
+            index={1}
+            style={{
+              marginTop: rem(spacing.xl),
+              backgroundColor: theme.surface,
+              borderRadius: radii.xl,
+              borderWidth: 1,
+              borderColor: theme.border,
+              padding: rem(spacing.lg),
+              gap: rem(spacing.md),
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(spacing.sm) }}>
+              <MaterialCommunityIcons name="console" size={rem(16)} color={theme.accentTint} />
+              <Text style={{ ...type.bodyStrong, color: theme.text }}>Finding the address</Text>
+            </View>
+
+            {STEPS.map((step, i) => (
+              <View key={i} style={{ flexDirection: 'row', gap: rem(spacing.md), alignItems: 'flex-start' }}>
+                <View
+                  style={{
+                    width: rem(20), height: rem(20), borderRadius: rem(10),
+                    backgroundColor: theme.accentDim, alignItems: 'center', justifyContent: 'center',
+                    marginTop: 1,
+                  }}
+                >
+                  <Text style={{ fontSize: rem(11), fontWeight: '700', color: theme.accentTint }}>{i + 1}</Text>
+                </View>
+                <Text style={{ ...type.caption, color: theme.textDim, flex: 1 }}>{step}</Text>
+              </View>
+            ))}
+          </FadeIn>
+
+          <View style={{ flex: 1, minHeight: rem(spacing.xl) }} />
+
+          <Button
+            label="Register rover"
+            loading={loading}
+            onPress={handleAdd}
+            style={{ marginTop: rem(spacing.xxl) }}
+          />
+      </KeyboardAwareScroll>
+
+      <SuccessOverlay
+        visible={celebrating}
+        message="Rover paired"
+        onDone={() => { setCelebrating(false); nav.goBack(); }}
+      />
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 56, paddingBottom: 8 },
-  backBtn: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  backArrow: { fontSize: 20 },
-  title: { fontSize: 18, fontWeight: '600', letterSpacing: -0.3 },
-  body: { flex: 1, paddingHorizontal: 24, paddingTop: 24 },
-  field: { marginBottom: 20 },
-  label: { fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1.5 },
-  input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 15 },
-  hint: { fontSize: 11, marginTop: 6 },
-  button: { marginTop: 12, borderRadius: 12, overflow: 'hidden' },
-  buttonGrad: { borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
-  buttonText: { fontSize: 15, fontWeight: '600', color: '#fff', letterSpacing: 0.3 },
-});

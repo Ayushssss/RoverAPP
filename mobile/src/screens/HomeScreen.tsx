@@ -1,102 +1,46 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Dimensions, Animated, StatusBar, Image, PixelRatio, useWindowDimensions, RefreshControl, Platform,
+  View, Text, ScrollView, StyleSheet, StatusBar,
+  useWindowDimensions, RefreshControl,
   NativeScrollEvent, NativeSyntheticEvent,
 } from 'react-native';
+import { Image } from 'expo-image';
+import Animated, {
+  useSharedValue, useAnimatedScrollHandler, useAnimatedStyle,
+  interpolate, Extrapolation,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
-import { devices as devicesApi, stats as statsApi } from '../services/api';
+import { devices as devicesApi, clusters as clustersApi, stats as statsApi } from '../services/api';
 import DropdownMenu from '../components/DropdownMenu';
+import { rem, spacing, radii, type, fonts } from '../theme';
+import { imagery, IMAGE_TRANSITION_MS } from '../media';
+import { relativeTime, greeting, plural } from '../utils/time';
+import {
+  Press, FadeIn, PulseDot, SectionHeader, Badge, EmptyState, Card,
+  Collapsible, MetricBar,
+} from '../components/ui';
+import { Skeleton } from '../components/Skeleton';
+import { FurrowArt } from '../components/Illustrations';
+import AnimatedNumber from '../components/AnimatedNumber';
+import Glass from '../components/Glass';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const scale = SCREEN_W / 390;
-const rem = (size: number) => Math.round(PixelRatio.roundToNearestPixel(size * Math.min(scale, 1.35)));
-const PAD = rem(20);
-const GAP = rem(10);
+const PAD = rem(spacing.xl);
+const GAP = rem(spacing.md);
 
-interface Device { id: string; name: string; mac_address: string; created_at: string; }
-
-const CARD = { radius: 14, pad: rem(14) };
-
-function PulseDot({ color, size: dotSize }: { color: string; size: number }) {
-  const pulse = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 0.3, duration: 900, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: Platform.OS !== 'web' }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-  return (
-    <View style={{ width: dotSize, height: dotSize, justifyContent: 'center', alignItems: 'center' }}>
-      <Animated.View style={{ width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: color, opacity: pulse }} />
-      <Animated.View style={{ position: 'absolute', width: dotSize * 2.2, height: dotSize * 2.2, borderRadius: dotSize * 1.1, borderWidth: 1.5, borderColor: color, opacity: pulse }} />
-    </View>
-  );
+interface Device {
+  id: string;
+  name: string;
+  mac_address: string;
+  cluster_id: string | null;
+  created_at: string;
 }
+interface Cluster { id: string; name: string; description: string; created_at: string }
 
-function ScalePress({ children, onPress, style }: { children: React.ReactNode; onPress?: () => void; style?: any }) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const pressIn = () => Animated.spring(scale, { toValue: 0.96, useNativeDriver: Platform.OS !== 'web', speed: 50, bounciness: 4 }).start();
-  const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: Platform.OS !== 'web', speed: 50, bounciness: 4 }).start();
-  return (
-    <Animated.View style={[{ transform: [{ scale }] }, style]}>
-      <TouchableOpacity onPress={onPress} activeOpacity={1} onPressIn={pressIn} onPressOut={pressOut}>{children}</TouchableOpacity>
-    </Animated.View>
-  );
-}
-
-function ShimmerBlock({ width, height, radius }: { width: number; height: number; radius?: number }) {
-  const { isDark } = useTheme();
-  const shimmer = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(shimmer, { toValue: 1, duration: 1000, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(shimmer, { toValue: 0, duration: 1000, useNativeDriver: Platform.OS !== 'web' }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-  const bgColor = shimmer.interpolate({
-    inputRange: [0, 1],
-    outputRange: isDark ? ['rgba(255,255,255,0.04)', 'rgba(255,255,255,0.10)'] : ['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.10)'],
-  });
-  return <Animated.View style={{ width, height, borderRadius: radius ?? 12, backgroundColor: bgColor }} />;
-}
-
-function SectionHeader({ title, accent }: { title: string; accent?: string }) {
-  const { theme } = useTheme();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(8), paddingHorizontal: PAD, marginTop: rem(18), marginBottom: rem(8) }}>
-      <View style={{ width: rem(3), height: rem(14), borderRadius: rem(1.5), backgroundColor: accent || theme.primary }} />
-      <Text style={{ fontSize: rem(16), fontWeight: '700', color: theme.text }}>{title}</Text>
-    </View>
-  );
-}
-
-function FadeUpSection({ children, delay = 0, style }: { children: React.ReactNode; delay?: number; style?: any }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(24)).current;
-  useEffect(() => {
-    const t = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(opacity, { toValue: 1, duration: 500, useNativeDriver: Platform.OS !== 'web', delay: delay * 50 }),
-        Animated.spring(translateY, { toValue: 0, friction: 8, tension: 40, useNativeDriver: Platform.OS !== 'web', delay: delay * 50 }),
-      ]).start();
-    }, 100);
-    return () => clearTimeout(t);
-  }, []);
-  return <Animated.View style={[{ opacity, transform: [{ translateY }] }, style]}>{children}</Animated.View>;
-}
+type Activity = { id: string; kind: 'rover' | 'cluster'; label: string; at: string };
 
 export default function HomeScreen() {
   const nav = useNavigation<any>();
@@ -105,111 +49,130 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
 
   const [devices, setDevices] = useState<Device[]>([]);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
   const [statsData, setStatsData] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [fetching, setFetching] = useState(true);
 
   const landscape = winW > winH;
-  const heroH = Math.min(winH * (landscape ? 0.42 : 0.33), landscape ? 280 : 310);
+  const heroH = Math.min(winH * (landscape ? 0.46 : 0.34), landscape ? 300 : 320);
+  const cardW = winW - PAD * 2;
 
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const fadeIn = useRef(new Animated.Value(0)).current;
-  const slideUp = useRef(new Animated.Value(20)).current;
+  const scrollY = useSharedValue(0);
   const analyticsScroll = useRef<ScrollView>(null);
   const [analyticsPage, setAnalyticsPage] = useState(0);
 
-  const totalDevices = statsData?.total || 0;
-  const activeDevices = statsData?.active || 0;
-  const clustersCount = statsData?.clustersCount || 0;
-  const healthScore = statsData?.healthScore ?? (totalDevices > 0 ? 100 : 0);
+  const total = statsData?.total ?? devices.length;
+  const active = statsData?.active ?? 0;
+  const clusterCount = clusters.length;
+  const healthScore = statsData?.healthScore ?? 0;
+  const onlineRate = total > 0 ? Math.round((active / total) * 100) : 0;
 
-  const analyticsData = [
-    { icon: 'router-wireless', val: `${totalDevices}`, label: 'Total rovers', sub: `${clustersCount} clusters`, color: theme.primary },
-    { icon: 'signal-cellular-3', val: `${activeDevices}`, label: 'Currently active', sub: totalDevices > 0 ? `${Math.round((activeDevices / totalDevices) * 100)}% online rate` : 'No devices', color: '#2A9D8F' },
-    { icon: 'chart-arc', val: `${healthScore}%`, label: 'Fleet health score', sub: 'Based on uptime & activity', color: '#C86A45' },
-  ];
+  /* ── Everything below is derived from real records, never invented ── */
 
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeIn, { toValue: 1, duration: 500, useNativeDriver: Platform.OS !== 'web' }),
-      Animated.spring(slideUp, { toValue: 0, friction: 8, tension: 40, useNativeDriver: Platform.OS !== 'web' }),
-    ]).start();
-  }, []);
+  const assigned = useMemo(() => devices.filter((d) => d.cluster_id).length, [devices]);
+  const unassigned = Math.max(devices.length - assigned, 0);
 
-  useEffect(() => {
-    if (analyticsData.length < 2) return;
-    const interval = setInterval(() => {
-      const next = (analyticsPage + 1) % analyticsData.length;
-      analyticsScroll.current?.scrollTo({ x: next * (winW - PAD * 2), animated: true });
-      setAnalyticsPage(next);
-    }, 3500);
-    return () => clearInterval(interval);
-  }, [analyticsPage, analyticsData.length, winW]);
+  const byCluster = useMemo(() => {
+    const counts = new Map<string, number>();
+    devices.forEach((d) => {
+      if (d.cluster_id) counts.set(d.cluster_id, (counts.get(d.cluster_id) ?? 0) + 1);
+    });
+    return clusters
+      .map((c) => ({ ...c, count: counts.get(c.id) ?? 0 }))
+      .sort((a, b) => b.count - a.count);
+  }, [devices, clusters]);
 
-  const handleAnalyticsScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const page = Math.round(e.nativeEvent.contentOffset.x / (winW - PAD * 2));
-    setAnalyticsPage(page);
-  }, [winW]);
-
-  const quickActions = [
-    { icon: 'plus-circle', label: 'Add Rover', screen: 'AddDevice' as const, colors: ['#D4A53A', '#B8860B'] as const },
-    { icon: 'robot', label: 'Fleet', screen: 'Rovers' as const, colors: ['#2A9D8F', '#1E7A6F'] as const },
-    { icon: 'sitemap', label: 'Clusters', screen: 'Clusters' as const, colors: ['#C86A45', '#A8553A'] as const },
-  ];
-
-  const scrollEvent = Animated.event(
-    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    { useNativeDriver: false }
+  const newest = useMemo(
+    () => [...devices].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0],
+    [devices]
   );
 
-  const heroParallax = scrollY.interpolate({
-    inputRange: [-heroH, 0, heroH],
-    outputRange: [-heroH * 0.3, 0, heroH * 0.15],
-    extrapolate: 'clamp',
-  });
+  const activity = useMemo<Activity[]>(() => {
+    const rovers: Activity[] = devices.map((d) => ({
+      id: `d-${d.id}`, kind: 'rover', label: d.name, at: d.created_at,
+    }));
+    const groups: Activity[] = clusters.map((c) => ({
+      id: `c-${c.id}`, kind: 'cluster', label: c.name, at: c.created_at,
+    }));
+    return [...rovers, ...groups]
+      .filter((a) => !!a.at)
+      .sort((a, b) => b.at.localeCompare(a.at))
+      .slice(0, 8);
+  }, [devices, clusters]);
 
-  const heroFade = scrollY.interpolate({
-    inputRange: [0, heroH * 0.5],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
+  /** Only surfaces when there is genuinely something to act on. */
+  const attention = useMemo(() => {
+    if (devices.length === 0) return null;
+    if (unassigned > 0) {
+      return {
+        icon: 'shape-outline' as const,
+        title: `${plural(unassigned, 'rover')} ungrouped`,
+        body: clusterCount === 0
+          ? 'Create a cluster to command them together.'
+          : 'Assign them to a cluster to drive them as one.',
+        cta: clusterCount === 0 ? 'Create cluster' : 'Open clusters',
+        onPress: () => nav.navigate('Clusters'),
+      };
+    }
+    return null;
+  }, [devices.length, unassigned, clusterCount, nav]);
 
-  const heroSlide = scrollY.interpolate({
-    inputRange: [0, heroH * 0.4],
-    outputRange: [0, -16],
-    extrapolate: 'clamp',
-  });
+  const analytics = [
+    {
+      icon: 'router-wireless' as const,
+      figure: total,
+      format: (n: number) => `${n}`,
+      label: 'Rovers registered',
+      sub: clusterCount > 0 ? `Across ${plural(clusterCount, 'cluster')}` : 'Not grouped yet',
+      color: theme.primaryTint,
+    },
+    {
+      icon: 'access-point' as const,
+      figure: onlineRate,
+      format: (n: number) => `${n}%`,
+      label: 'Online rate',
+      sub: total > 0 ? `${active} of ${total} reachable` : 'Waiting on first pairing',
+      color: theme.successTint,
+    },
+    {
+      icon: 'heart-pulse' as const,
+      figure: healthScore,
+      format: (n: number) => `${n}%`,
+      label: 'Fleet health',
+      sub: 'Weighted by uptime and command success',
+      color: theme.accentTint,
+    },
+  ];
 
-  const headerFade = scrollY.interpolate({
-    inputRange: [0, heroH * 0.6],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
+  useEffect(() => {
+    if (analytics.length < 2) return;
+    const timer = setInterval(() => {
+      const next = (analyticsPage + 1) % analytics.length;
+      analyticsScroll.current?.scrollTo({ x: next * cardW, animated: true });
+      setAnalyticsPage(next);
+    }, 4600);
+    return () => clearInterval(timer);
+  }, [analyticsPage, analytics.length, cardW]);
 
-  const renderRoverSkeleton = () => (
-    <View style={{ marginHorizontal: PAD, gap: rem(7) }}>
-      {[1, 2, 3].map((i) => (
-        <View key={i} style={{ padding: CARD.pad, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: theme.surface, borderRadius: CARD.radius, borderWidth: 1, borderColor: theme.border }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(12) }}>
-            <ShimmerBlock width={rem(44)} height={rem(44)} radius={12} />
-            <View style={{ gap: rem(6) }}>
-              <ShimmerBlock width={rem(100)} height={rem(12)} radius={6} />
-              <ShimmerBlock width={rem(70)} height={rem(10)} radius={5} />
-            </View>
-          </View>
-          <ShimmerBlock width={rem(18)} height={rem(18)} radius={9} />
-        </View>
-      ))}
-    </View>
+  const handleAnalyticsScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      setAnalyticsPage(Math.round(e.nativeEvent.contentOffset.x / cardW));
+    },
+    [cardW]
   );
 
   const load = useCallback(async () => {
     try {
-      const [d, s] = await Promise.all([devicesApi.list(), statsApi.get()]);
-      setDevices(d || []);
+      const [d, c, s] = await Promise.all([devicesApi.list(), clustersApi.list(), statsApi.get()]);
+      setDevices((d as Device[]) || []);
+      setClusters((c as Cluster[]) || []);
       setStatsData(s || null);
-    } catch (e) { console.warn('fetch err', e); }
-    finally { setFetching(false); }
+    } catch (e) {
+      console.warn('home: fetch failed', e);
+    } finally {
+      setFetching(false);
+    }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -220,183 +183,471 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [load]);
 
+  const scrollHandler = useAnimatedScrollHandler((e) => {
+    scrollY.value = e.contentOffset.y;
+  });
+
+  const heroStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateY: interpolate(
+          scrollY.value, [-heroH, 0, heroH],
+          [-heroH * 0.28, 0, heroH * 0.18], Extrapolation.CLAMP
+        ),
+      },
+      { scale: interpolate(scrollY.value, [-heroH, 0], [1.25, 1], Extrapolation.CLAMP) },
+    ],
+  }));
+
+  const heroContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(scrollY.value, [0, heroH * 0.55], [1, 0], Extrapolation.CLAMP),
+    transform: [
+      { translateY: interpolate(scrollY.value, [0, heroH * 0.55], [0, -20], Extrapolation.CLAMP) },
+    ],
+  }));
+
+  const quickActions = [
+    { icon: 'plus' as const, label: 'Add rover', screen: 'AddDevice', tone: theme.primary, fg: theme.primaryOn },
+    { icon: 'robot-outline' as const, label: 'Fleet', screen: 'Rovers', tone: theme.surface, fg: theme.text },
+    { icon: 'sitemap-outline' as const, label: 'Clusters', screen: 'Clusters', tone: theme.surface, fg: theme.text },
+  ];
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
-      <ScrollView
-        onScroll={scrollEvent}
+
+      <Animated.ScrollView
+        onScroll={scrollHandler}
         scrollEventThrottle={16}
-        contentContainerStyle={{ paddingBottom: insets.bottom + rem(90) }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
+        contentContainerStyle={{ paddingBottom: insets.bottom + rem(96) }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primaryTint} progressViewOffset={insets.top} />
+        }
       >
-        {/* Hero */}
-        <Animated.View style={{ height: heroH, backgroundColor: theme.surfaceElevated, transform: [{ translateY: heroParallax }] }}>
+        {/* ── Hero ─────────────────────────────────────────── */}
+        <Animated.View style={[{ height: heroH, backgroundColor: theme.surfaceElevated }, heroStyle]}>
           <Image
-            source={{ uri: 'https://images.unsplash.com/photo-1625246333195-78d9c38ad449?w=1000&q=85' }}
+            source={imagery.fieldAerial.uri}
+            placeholder={{ blurhash: imagery.fieldAerial.blurhash }}
+            transition={IMAGE_TRANSITION_MS}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            accessibilityLabel={imagery.fieldAerial.alt}
             style={StyleSheet.absoluteFill}
           />
-          <LinearGradient colors={[isDark ? 'rgba(11,15,28,0.7)' : 'rgba(255,248,240,0.55)', isDark ? 'rgba(11,15,28,0.95)' : 'rgba(255,248,240,0.95)']} style={StyleSheet.absoluteFill}>
-            <View style={{ flex: 1 }}>
-              <Animated.View style={{ paddingTop: insets.top + 4, paddingHorizontal: PAD, paddingBottom: rem(4), flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', opacity: headerFade }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(8) }}>
-                  <LinearGradient colors={[theme.primary, theme.primary + '80']} style={{ width: rem(10), height: rem(10), borderRadius: rem(5) }} />
-                  <Text style={{ fontSize: rem(12), fontWeight: '700', color: theme.text, letterSpacing: 2, opacity: 0.8 }}>AGRIVERSE</Text>
-                </View>
-                <DropdownMenu />
-              </Animated.View>
-              <Animated.View style={{ paddingHorizontal: PAD, paddingTop: rem(18), opacity: Animated.multiply(fadeIn, heroFade), transform: [{ translateY: slideUp }, { translateY: heroSlide }] }}>
-                <View style={{ alignSelf: 'flex-start', backgroundColor: theme.primary + '20', paddingHorizontal: rem(10), paddingVertical: rem(3), borderRadius: 999, borderWidth: 1, borderColor: theme.primary + '30', marginBottom: rem(6) }}>
-                  <Text style={{ fontSize: rem(8), fontWeight: '700', color: theme.primary, letterSpacing: 1.5 }}>FARM OS v2.4</Text>
-                </View>
-                <Text style={{ fontSize: rem(landscape ? 22 : 28), fontWeight: '700', color: theme.text, lineHeight: rem(landscape ? 28 : 34), marginBottom: rem(3) }}>
-                  {landscape ? 'Your farm, intelligently managed.' : `Your farm,\nintelligently managed.`}
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(8) }}>
-                  <PulseDot color={activeDevices > 0 ? theme.primary : theme.textMuted} size={rem(7)} />
-                  <Text style={{ fontSize: rem(12), color: theme.textDim }}>{activeDevices} of {totalDevices} rovers online</Text>
-                </View>
-              </Animated.View>
+          <LinearGradient
+            colors={
+              isDark
+                ? ['rgba(11,15,28,0.5)', 'rgba(11,15,28,0.86)', theme.bg]
+                : ['rgba(255,248,240,0.4)', 'rgba(255,248,240,0.85)', theme.bg]
+            }
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+
+          <View style={{ flex: 1, paddingTop: insets.top + rem(spacing.sm), paddingHorizontal: PAD }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(spacing.sm) }}>
+                <View style={{ width: rem(9), height: rem(9), borderRadius: rem(4.5), backgroundColor: theme.primaryTint }} />
+                <Text style={{ ...type.micro, color: theme.text, opacity: 0.85 }}>AGRIVERSE</Text>
+              </View>
+              <DropdownMenu />
             </View>
-          </LinearGradient>
+
+            {/* Bottom padding clears the fleet card that overlaps the hero, so
+                the headline and status line are never sat on. */}
+            <Animated.View style={[{ flex: 1, justifyContent: 'flex-end', paddingBottom: rem(72) }, heroContentStyle]}>
+              <Badge label="FARM OS v2.4" />
+              <Text
+                style={{
+                  fontSize: rem(landscape ? 22 : 27),
+                  lineHeight: rem(landscape ? 28 : 33),
+                  fontWeight: '700',
+                  letterSpacing: -0.8,
+                  color: theme.text,
+                  marginTop: rem(spacing.md),
+                  maxWidth: rem(320),
+                }}
+              >
+                {greeting()}. {total > 0 ? 'Your fields are covered.' : 'Let’s get you paired.'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(spacing.xs), marginTop: rem(spacing.sm) }}>
+                <PulseDot color={active > 0 ? theme.successTint : theme.textMuted} size={rem(6)} />
+                <Text style={{ ...type.caption, color: theme.textSecondary }}>
+                  {fetching ? 'Checking fleet…' : `${active} of ${total} rovers online`}
+                </Text>
+              </View>
+            </Animated.View>
+          </View>
         </Animated.View>
 
-        {/* Quick Stats */}
-        <FadeUpSection delay={0} style={{ flexDirection: 'row', paddingHorizontal: PAD, marginTop: -rem(20), gap: GAP }}>
-          <View style={{ flex: 1, backgroundColor: theme.surface, borderRadius: CARD.radius, padding: rem(12), borderWidth: 1, borderColor: theme.border }}>
-            <View style={{ width: rem(32), height: rem(32), borderRadius: rem(10), backgroundColor: theme.primary + '15', justifyContent: 'center', alignItems: 'center', marginBottom: rem(8) }}>
-              <MaterialCommunityIcons name="signal-cellular-3" size={rem(16)} color={theme.primary} />
-            </View>
-            <View style={{ flexShrink: 1 }}>
-              <Text style={{ fontSize: rem(18), fontWeight: '700', color: theme.text, letterSpacing: -0.3 }} numberOfLines={1}>
-                {activeDevices}<Text style={{ fontSize: rem(11), fontWeight: '400', color: theme.textDim }}> of {totalDevices}</Text>
-              </Text>
-            </View>
-            <Text style={{ fontSize: rem(9), color: theme.textDim, letterSpacing: 0.3, marginTop: rem(2) }} numberOfLines={1}>Active rovers</Text>
-          </View>
-          <View style={{ flex: 1, backgroundColor: theme.surface, borderRadius: CARD.radius, padding: rem(12), borderWidth: 1, borderColor: theme.border }}>
-            <View style={{ width: rem(32), height: rem(32), borderRadius: rem(10), backgroundColor: '#2A9D8F15', justifyContent: 'center', alignItems: 'center', marginBottom: rem(8) }}>
-              <MaterialCommunityIcons name="sitemap-outline" size={rem(16)} color="#2A9D8F" />
-            </View>
-            <View style={{ flexShrink: 1 }}>
-              <Text style={{ fontSize: rem(18), fontWeight: '700', color: theme.text, letterSpacing: -0.3 }} numberOfLines={1}>
-                {clustersCount}<Text style={{ fontSize: rem(11), fontWeight: '400', color: theme.textDim }}> groups</Text>
-              </Text>
-            </View>
-            <Text style={{ fontSize: rem(9), color: theme.textDim, letterSpacing: 0.3, marginTop: rem(2) }} numberOfLines={1}>Clusters</Text>
-          </View>
-          <View style={{ flex: 1, backgroundColor: theme.surface, borderRadius: CARD.radius, padding: rem(12), borderWidth: 1, borderColor: theme.border }}>
-            <View style={{ width: rem(32), height: rem(32), borderRadius: rem(10), backgroundColor: '#D4A53A15', justifyContent: 'center', alignItems: 'center', marginBottom: rem(8) }}>
-              <MaterialCommunityIcons name="heart-pulse" size={rem(16)} color="#D4A53A" />
-            </View>
-            <View style={{ flexShrink: 1 }}>
-              <Text style={{ fontSize: rem(18), fontWeight: '700', color: theme.text, letterSpacing: -0.3 }} numberOfLines={1}>
-                {healthScore}<Text style={{ fontSize: rem(11), fontWeight: '400', color: theme.textDim }}>%</Text>
-              </Text>
-            </View>
-            <Text style={{ fontSize: rem(9), color: theme.textDim, letterSpacing: 0.3, marginTop: rem(2) }} numberOfLines={1}>Health</Text>
-          </View>
-        </FadeUpSection>
-
-        {/* Quick Actions */}
-        <FadeUpSection delay={1}>
-          <SectionHeader title="Quick Actions" accent={theme.primary} />
-          <View style={{ flexDirection: 'row', paddingHorizontal: PAD, gap: GAP }}>
-            {quickActions.slice(0, winW > 480 ? 3 : 2).map((x, i) => (
-              <ScalePress key={i} onPress={() => nav.navigate(x.screen)} style={{ flex: 1, borderRadius: CARD.radius }}>
-                <LinearGradient colors={x.colors} style={{ padding: rem(16), alignItems: 'center', gap: rem(6), borderRadius: CARD.radius }}>
-                  <MaterialCommunityIcons name={x.icon as any} size={rem(22)} color="#fff" />
-                  <Text style={{ fontSize: rem(11), fontWeight: '600', color: 'rgba(255,255,255,0.9)' }}>{x.label}</Text>
-                </LinearGradient>
-              </ScalePress>
-            ))}
-          </View>
-        </FadeUpSection>
-
-        {/* Rovers */}
-        <FadeUpSection delay={2}>
-          <SectionHeader title="Your Rovers" />
-          {fetching ? (
-            renderRoverSkeleton()
-          ) : devices.length === 0 ? (
-            <ScalePress onPress={() => nav.navigate('AddDevice')} style={{ marginHorizontal: PAD }}>
-              <View style={{ padding: rem(28), backgroundColor: theme.surface, borderRadius: CARD.radius, borderWidth: 1, borderColor: theme.border, borderStyle: 'dashed', alignItems: 'center', gap: rem(8) }}>
-                <View style={{ width: rem(48), height: rem(48), borderRadius: rem(14), backgroundColor: theme.primary + '12', justifyContent: 'center', alignItems: 'center' }}>
-                  <MaterialCommunityIcons name="plus-circle-outline" size={rem(26)} color={theme.primary} />
-                </View>
-                <Text style={{ fontSize: rem(13), color: theme.textDim }}>No rovers yet — tap to add one</Text>
-              </View>
-            </ScalePress>
-          ) : (
-            <View style={{ paddingHorizontal: PAD, gap: rem(7) }}>
-              {devices.slice(0, 3).map((r) => (
-                <ScalePress key={r.id} onPress={() => nav.navigate('Control', { deviceId: r.name, deviceName: r.name, macAddress: r.mac_address })}>
-                  <View style={{ padding: CARD.pad, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: theme.surface, borderRadius: CARD.radius, borderWidth: 1, borderColor: theme.border }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(12) }}>
-                      <View style={{ width: rem(44), height: rem(44), borderRadius: rem(12), backgroundColor: theme.primary + '15', justifyContent: 'center', alignItems: 'center' }}>
-                        <MaterialCommunityIcons name="robot-outline" size={rem(22)} color={theme.primary} />
-                      </View>
-                      <View style={{ flexShrink: 1 }}>
-                        <Text style={{ fontSize: rem(14), fontWeight: '600', color: theme.text }} numberOfLines={1}>{r.name}</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(6), marginTop: rem(3) }}>
-                          <PulseDot color={theme.primary} size={rem(5)} />
-                          <Text style={{ fontSize: rem(10), color: theme.textDim }}>Online</Text>
-                          <Text style={{ fontSize: rem(9), color: theme.textMuted }} numberOfLines={1}>{r.mac_address.slice(-5)}</Text>
-                        </View>
-                      </View>
-                    </View>
-                    <MaterialCommunityIcons name="chevron-right" size={rem(18)} color={theme.textMuted} />
+        {/* ── Fleet overview: summary up top, breakdown one tap down ── */}
+        {/* Overlaps the hero just enough for the glass to pick up photography
+            without covering the hero's own text. */}
+        <FadeIn index={0} style={{ paddingHorizontal: PAD, marginTop: -rem(46) }}>
+          <Glass radius={radii.xl}>
+            <View style={{ padding: rem(spacing.xl), gap: rem(spacing.lg) }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: rem(spacing.md) }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ ...type.micro, color: theme.textMuted, textTransform: 'uppercase' }}>
+                  Fleet status
+                </Text>
+                {fetching ? (
+                  <Skeleton width={rem(120)} height={rem(36)} radius={8} style={{ marginTop: rem(spacing.sm) }} />
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: rem(2) }}>
+                    <AnimatedNumber
+                      value={active}
+                      style={{
+                        fontSize: rem(36), fontWeight: '700', letterSpacing: -1.4, color: theme.text,
+                      }}
+                    />
+                    <Text style={{ fontSize: rem(17), fontWeight: '500', color: theme.textMuted }}>
+                      {' '}/ {total} online
+                    </Text>
                   </View>
-                </ScalePress>
+                )}
+                {!fetching && !!newest && (
+                  <Text style={{ ...type.caption, color: theme.textDim, marginTop: rem(2) }} numberOfLines={1}>
+                    Newest: {newest.name} · {relativeTime(newest.created_at)}
+                  </Text>
+                )}
+              </View>
+
+              <View
+                style={{
+                  alignItems: 'center', justifyContent: 'center',
+                  width: rem(56), height: rem(56), borderRadius: rem(28),
+                  borderWidth: 3,
+                  borderColor: healthScore >= 70 ? theme.successTint : healthScore > 0 ? theme.accent : theme.border,
+                }}
+              >
+                {fetching ? (
+                  <Text style={{ fontSize: rem(15), fontWeight: '700', color: theme.text }}>—</Text>
+                ) : (
+                  <AnimatedNumber
+                    value={healthScore}
+                    style={{ fontSize: rem(15), fontWeight: '700', color: theme.text }}
+                  />
+                )}
+                <Text style={{ fontSize: rem(8), color: theme.textMuted, letterSpacing: 0.6 }}>HEALTH</Text>
+              </View>
+            </View>
+
+            {!fetching && devices.length > 0 && (
+              <MetricBar
+                segments={[
+                  { count: assigned, color: theme.primary, label: 'Grouped' },
+                  { count: unassigned, color: theme.accent, label: 'Ungrouped' },
+                ]}
+              />
+            )}
+            </View>
+          </Glass>
+        </FadeIn>
+
+        {/* ── Attention: absent unless there's something to fix ── */}
+        {!fetching && attention && (
+          <FadeIn index={1} style={{ paddingHorizontal: PAD, marginTop: GAP }}>
+            <Press onPress={attention.onPress} label={attention.cta}>
+              <View
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                  padding: rem(spacing.lg),
+                  borderRadius: radii.xl,
+                  backgroundColor: theme.accentDim,
+                  borderWidth: 1,
+                  borderColor: theme.accent + '40',
+                }}
+              >
+                <MaterialCommunityIcons name={attention.icon} size={rem(20)} color={theme.accentTint} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ ...type.bodyStrong, color: theme.text }}>{attention.title}</Text>
+                  <Text style={{ ...type.caption, color: theme.textDim, marginTop: 1 }}>{attention.body}</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={rem(18)} color={theme.textMuted} />
+              </View>
+            </Press>
+          </FadeIn>
+        )}
+
+        {/* ── Quick actions ────────────────────────────────── */}
+        <FadeIn index={2}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: PAD, gap: rem(spacing.sm), marginTop: rem(spacing.xl) }}
+          >
+            {quickActions.map((a) => (
+              <Press key={a.label} onPress={() => nav.navigate(a.screen)} label={a.label}>
+                <View
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: rem(spacing.sm),
+                    paddingVertical: rem(11), paddingHorizontal: rem(spacing.lg),
+                    borderRadius: radii.full,
+                    backgroundColor: a.tone,
+                    borderWidth: 1,
+                    borderColor: a.tone === theme.surface ? theme.border : 'transparent',
+                  }}
+                >
+                  <MaterialCommunityIcons name={a.icon} size={rem(16)} color={a.fg} />
+                  <Text style={{ fontSize: rem(13), fontWeight: '600', color: a.fg }}>{a.label}</Text>
+                </View>
+              </Press>
+            ))}
+          </ScrollView>
+        </FadeIn>
+
+        {/* ── Rovers: a preview, not the whole list ────────── */}
+        <FadeIn index={3} style={{ marginTop: rem(spacing.xxl) }}>
+          <SectionHeader
+            title="Your rovers"
+            style={{ paddingHorizontal: PAD, marginBottom: rem(spacing.md) }}
+            right={
+              devices.length > 3 ? (
+                <Press onPress={() => nav.navigate('Rovers')} label="See all rovers">
+                  <Text style={{ ...type.caption, color: theme.primaryTint, fontWeight: '700' }}>
+                    All {devices.length}
+                  </Text>
+                </Press>
+              ) : undefined
+            }
+          />
+
+          {fetching ? (
+            <View style={{ paddingHorizontal: PAD, gap: rem(spacing.sm) }}>
+              {[0, 1, 2].map((i) => (
+                <View
+                  key={i}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                    padding: rem(spacing.lg), backgroundColor: theme.surface,
+                    borderRadius: radii.xl, borderWidth: 1, borderColor: theme.border,
+                  }}
+                >
+                  <Skeleton width={rem(42)} height={rem(42)} radius={radii.md} delay={i * 90} />
+                  <View style={{ flex: 1, gap: rem(6) }}>
+                    <Skeleton width="55%" height={rem(13)} radius={6} delay={i * 90 + 60} />
+                    <Skeleton width="35%" height={rem(10)} radius={5} delay={i * 90 + 120} />
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : devices.length === 0 ? (
+            <Card style={{ marginHorizontal: PAD }} dashed padded={false}>
+              <EmptyState
+                art={<FurrowArt size={rem(168)} />}
+                title="No rovers paired"
+                body="Register your first ESP32 to start streaming commands to the field."
+                actionLabel="Add a rover"
+                onAction={() => nav.navigate('AddDevice')}
+              />
+            </Card>
+          ) : (
+            <View style={{ paddingHorizontal: PAD, gap: rem(spacing.sm) }}>
+              {devices.slice(0, 3).map((r, i) => (
+                <FadeIn key={r.id} index={i}>
+                  <Press
+                    label={`Control ${r.name}`}
+                    onPress={() =>
+                      nav.navigate('RoverHub', { deviceName: r.name, macAddress: r.mac_address })
+                    }
+                  >
+                    <View
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                        padding: rem(spacing.lg), backgroundColor: theme.surface,
+                        borderRadius: radii.xl, borderWidth: 1, borderColor: theme.border,
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: rem(42), height: rem(42), borderRadius: radii.md,
+                          backgroundColor: theme.primaryDim, alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        <MaterialCommunityIcons name="robot-outline" size={rem(21)} color={theme.primaryTint} />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ ...type.bodyStrong, color: theme.text }} numberOfLines={1}>{r.name}</Text>
+                        <Text
+                          style={{ fontFamily: fonts.mono, fontSize: rem(10), color: theme.textMuted, marginTop: 3 }}
+                          numberOfLines={1}
+                        >
+                          {r.mac_address}
+                        </Text>
+                      </View>
+                      <PulseDot color={theme.successTint} size={rem(6)} />
+                      <MaterialCommunityIcons name="chevron-right" size={rem(18)} color={theme.textMuted} />
+                    </View>
+                  </Press>
+                </FadeIn>
               ))}
             </View>
           )}
-        </FadeUpSection>
+        </FadeIn>
 
-        {/* Analytics Carousel */}
-        {analyticsData.length > 0 && (
-          <FadeUpSection delay={3}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: PAD, marginTop: rem(18), marginBottom: rem(8) }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: rem(8) }}>
-                <View style={{ width: rem(3), height: rem(14), borderRadius: rem(1.5), backgroundColor: '#2A9D8F' }} />
-                <Text style={{ fontSize: rem(16), fontWeight: '700', color: theme.text }}>Analytics</Text>
-              </View>
-              <View style={{ flexDirection: 'row', gap: rem(5) }}>
-                {analyticsData.map((_, i) => (
-                  <View key={i} style={{ width: rem(6), height: rem(6), borderRadius: rem(3), backgroundColor: i === analyticsPage ? theme.primary : theme.textMuted, opacity: i === analyticsPage ? 1 : 0.4 }} />
+        {/* ── Folded detail ────────────────────────────────── */}
+        {!fetching && devices.length > 0 && (
+          <FadeIn index={4} style={{ paddingHorizontal: PAD, marginTop: rem(spacing.xxl), gap: rem(spacing.md) }}>
+            <Collapsible
+              title="Cluster breakdown"
+              summary={clusterCount > 0 ? `${plural(clusterCount, 'cluster')} · ${unassigned} ungrouped` : 'No clusters yet'}
+              icon="sitemap-outline"
+              iconColor={theme.successTint}
+            >
+              {byCluster.length === 0 ? (
+                <Text style={{ ...type.caption, color: theme.textDim }}>
+                  Nothing grouped yet. Clusters let one command reach every rover in a block.
+                </Text>
+              ) : (
+                <View style={{ gap: rem(spacing.md) }}>
+                  {byCluster.map((c) => (
+                    <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md) }}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ ...type.caption, color: theme.text, fontWeight: '600' }} numberOfLines={1}>
+                          {c.name}
+                        </Text>
+                        {!!c.description && (
+                          <Text style={{ fontSize: rem(11), color: theme.textMuted }} numberOfLines={1}>
+                            {c.description}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={{ ...type.caption, color: theme.textDim }}>{plural(c.count, 'rover')}</Text>
+                    </View>
+                  ))}
+
+                  {unassigned > 0 && (
+                    <View
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                        paddingTop: rem(spacing.md), borderTopWidth: 1, borderTopColor: theme.border,
+                      }}
+                    >
+                      <Text style={{ ...type.caption, color: theme.textDim, flex: 1 }}>Ungrouped</Text>
+                      <Text style={{ ...type.caption, color: theme.accentTint, fontWeight: '700' }}>
+                        {plural(unassigned, 'rover')}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </Collapsible>
+
+            <Collapsible
+              title="Recent activity"
+              summary={activity.length > 0 ? `Last change ${relativeTime(activity[0].at)}` : 'Nothing yet'}
+              icon="history"
+              iconColor={theme.accentTint}
+            >
+              <View style={{ gap: rem(spacing.lg) }}>
+                {activity.map((a) => (
+                  <View key={a.id} style={{ flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md) }}>
+                    <View
+                      style={{
+                        width: rem(26), height: rem(26), borderRadius: rem(13),
+                        backgroundColor: a.kind === 'rover' ? theme.primaryDim : theme.successDim,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <MaterialCommunityIcons
+                        name={a.kind === 'rover' ? 'robot-outline' : 'sitemap-outline'}
+                        size={rem(14)}
+                        color={a.kind === 'rover' ? theme.primaryTint : theme.successTint}
+                      />
+                    </View>
+                    <Text style={{ ...type.caption, color: theme.text, flex: 1 }} numberOfLines={1}>
+                      {a.kind === 'rover' ? 'Paired' : 'Created'}{' '}
+                      <Text style={{ fontWeight: '700' }}>{a.label}</Text>
+                    </Text>
+                    <Text style={{ fontSize: rem(11), color: theme.textMuted }}>{relativeTime(a.at)}</Text>
+                  </View>
                 ))}
               </View>
-            </View>
-            <ScrollView
-              ref={analyticsScroll}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              onMomentumScrollEnd={handleAnalyticsScroll}
-              snapToInterval={winW - PAD * 2}
-              decelerationRate="fast"
-              contentContainerStyle={{ paddingHorizontal: PAD }}
-            >
-              {analyticsData.map((x, i) => (
-                <View key={i} style={{ width: winW - PAD * 2 }}>
-                  <LinearGradient colors={[x.color + '18', x.color + '06']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ borderRadius: CARD.radius, borderWidth: 1, borderColor: theme.border, padding: rem(16), flexDirection: 'row', alignItems: 'center', gap: rem(14), marginRight: GAP }}>
-                    <View style={{ width: rem(44), height: rem(44), borderRadius: rem(12), backgroundColor: x.color + '20', justifyContent: 'center', alignItems: 'center' }}>
-                      <MaterialCommunityIcons name={x.icon as any} size={rem(20)} color={x.color} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: rem(26), fontWeight: '700', color: theme.text, letterSpacing: -0.5 }}>{x.val}</Text>
-                      <Text style={{ fontSize: rem(11), color: theme.textDim, marginTop: rem(2) }}>{x.label}</Text>
-                      <Text style={{ fontSize: rem(9), color: theme.textMuted, marginTop: rem(2) }}>{x.sub}</Text>
-                    </View>
-                  </LinearGradient>
-                </View>
-              ))}
-            </ScrollView>
-          </FadeUpSection>
+            </Collapsible>
+          </FadeIn>
         )}
 
-        <View style={{ height: rem(20) }} />
-      </ScrollView>
+        {/* ── Analytics ────────────────────────────────────── */}
+        <FadeIn index={5} style={{ marginTop: rem(spacing.xxl) }}>
+          <SectionHeader
+            title="Analytics"
+            accent={theme.accent}
+            style={{ paddingHorizontal: PAD, marginBottom: rem(spacing.md) }}
+            right={
+              <View style={{ flexDirection: 'row', gap: rem(5) }}>
+                {analytics.map((_, i) => (
+                  <View
+                    key={i}
+                    style={{
+                      width: i === analyticsPage ? rem(16) : rem(6),
+                      height: rem(6),
+                      borderRadius: rem(3),
+                      backgroundColor: i === analyticsPage ? theme.primaryTint : theme.border,
+                    }}
+                  />
+                ))}
+              </View>
+            }
+          />
+
+          <ScrollView
+            ref={analyticsScroll}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={handleAnalyticsScroll}
+            snapToInterval={cardW}
+            decelerationRate="fast"
+            contentContainerStyle={{ paddingHorizontal: PAD }}
+          >
+            {analytics.map((a) => (
+              <View key={a.label} style={{ width: cardW }}>
+                <View
+                  style={{
+                    backgroundColor: theme.surface,
+                    borderRadius: radii.xl,
+                    borderWidth: 1,
+                    borderColor: theme.border,
+                    padding: rem(spacing.xl),
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: rem(spacing.lg),
+                  }}
+                >
+                  <View
+                    style={{
+                      width: rem(46), height: rem(46), borderRadius: radii.lg,
+                      backgroundColor: a.color + '1F', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <MaterialCommunityIcons name={a.icon} size={rem(22)} color={a.color} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    {fetching ? (
+                      <Text style={{ fontSize: rem(28), fontWeight: '700', letterSpacing: -1, color: theme.text }}>
+                        —
+                      </Text>
+                    ) : (
+                      <AnimatedNumber
+                        value={a.figure}
+                        format={a.format}
+                        style={{ fontSize: rem(28), fontWeight: '700', letterSpacing: -1, color: theme.text }}
+                      />
+                    )}
+                    <Text style={{ ...type.caption, color: theme.textSecondary, marginTop: 2 }}>{a.label}</Text>
+                    <Text style={{ fontSize: rem(11), color: theme.textMuted, marginTop: 2 }} numberOfLines={1}>
+                      {a.sub}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </FadeIn>
+      </Animated.ScrollView>
     </View>
   );
 }

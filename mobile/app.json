@@ -33,7 +33,8 @@
     },
     "plugins": [
       "expo-web-browser",
-      "expo-updates"
+      "expo-updates",
+      "expo-image"
     ],
     "updates": {
       "url": "https://u.expo.dev/3eb1cfec-255d-4ecb-89d4-37dc762d9cff"

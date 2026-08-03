@@ -1,86 +1,101 @@
 import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
 import { useColorScheme } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  SCHEMES, SCHEME_LIST, DEFAULT_SCHEME,
+  type SchemeId, type Scheme, type ThemePalette,
+} from '../theme/schemes';
 
-export const darkPalette = {
-  bg: '#0B0F1C',
-  surface: '#161B2E',
-  surfaceElevated: '#1E2538',
-  border: 'rgba(255,247,237,0.1)',
-  borderLight: 'rgba(255,247,237,0.05)',
-  primary: '#D4A53A',
-  primaryDim: 'rgba(212,165,58,0.15)',
-  accent: '#C86A45',
-  accentDim: 'rgba(200,106,69,0.12)',
-  text: '#FFF7ED',
-  textSecondary: 'rgba(255,247,237,0.7)',
-  textDim: 'rgba(255,247,237,0.4)',
-  textMuted: 'rgba(255,247,237,0.2)',
-  cardStart: '#1E2538',
-  cardEnd: '#161B2E',
-  navBar: 'rgba(11,15,28,0.96)',
-  error: '#DC2626',
-  success: '#22C55E',
-  destructive: '#DC2626',
-  ring: '#D4A53A',
-};
+export type { ThemePalette, SchemeId, Scheme };
+export { SCHEMES, SCHEME_LIST };
 
-export const lightPalette = {
-  bg: '#FFF8F0',
-  surface: '#FFFFFF',
-  surfaceElevated: '#FFFFFF',
-  border: 'rgba(0,0,0,0.08)',
-  borderLight: 'rgba(0,0,0,0.04)',
-  primary: '#B8532E',
-  primaryDim: 'rgba(184,83,46,0.1)',
-  accent: '#D4A53A',
-  accentDim: 'rgba(212,165,58,0.12)',
-  text: '#3D2314',
-  textSecondary: 'rgba(61,35,20,0.65)',
-  textDim: 'rgba(61,35,20,0.45)',
-  textMuted: 'rgba(61,35,20,0.25)',
-  cardStart: '#FFFFFF',
-  cardEnd: '#F5EDE6',
-  navBar: 'rgba(255,248,240,0.96)',
-  error: '#DC2626',
-  success: '#22A675',
-  destructive: '#DC2626',
-  ring: '#B8532E',
-};
+/** Kept so anything importing the original palettes still resolves. */
+export const darkPalette = SCHEMES.terracotta.dark;
+export const lightPalette = SCHEMES.terracotta.light;
 
-export type ThemePalette = typeof darkPalette;
+const STORAGE_KEY = 'rover:appearance';
+
+interface Appearance {
+  scheme: SchemeId;
+  /** `null` means "follow the system". */
+  dark: boolean | null;
+}
 
 interface ThemeCtx {
   theme: ThemePalette;
   isDark: boolean;
   toggle: () => void;
+  schemeId: SchemeId;
+  setScheme: (id: SchemeId) => void;
+  /** True while the stored preference is still being read. */
+  hydrating: boolean;
 }
 
 const ThemeContext = createContext<ThemeCtx>({
-  theme: darkPalette,
+  theme: SCHEMES[DEFAULT_SCHEME].dark,
   isDark: true,
   toggle: () => {},
+  schemeId: DEFAULT_SCHEME,
+  setScheme: () => {},
+  hydrating: true,
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const system = useColorScheme();
-  const [isDark, setIsDark] = useState(system !== 'light');
-  const [userToggled, setUserToggled] = useState(false);
 
+  const [schemeId, setSchemeId] = useState<SchemeId>(DEFAULT_SCHEME);
+  const [darkOverride, setDarkOverride] = useState<boolean | null>(null);
+  const [hydrating, setHydrating] = useState(true);
+
+  // Read the saved appearance once. Until it resolves we render the default,
+  // which avoids a blank frame at the cost of a possible single repaint.
   useEffect(() => {
-    if (!userToggled) {
-      setIsDark(system !== 'light');
-    }
-  }, [system, userToggled]);
+    let alive = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw && alive) {
+          const saved = JSON.parse(raw) as Partial<Appearance>;
+          if (saved.scheme && SCHEMES[saved.scheme]) setSchemeId(saved.scheme);
+          if (saved.dark === true || saved.dark === false) setDarkOverride(saved.dark);
+        }
+      } catch {
+        // A corrupt preference should not stop the app booting.
+      } finally {
+        if (alive) setHydrating(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
-  const theme = useMemo(() => (isDark ? darkPalette : lightPalette), [isDark]);
+  const isDark = darkOverride ?? system !== 'light';
+
+  const persist = (next: Partial<Appearance>) => {
+    const payload: Appearance = {
+      scheme: next.scheme ?? schemeId,
+      dark: next.dark !== undefined ? next.dark : darkOverride,
+    };
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch(() => {});
+  };
+
+  const theme = useMemo(
+    () => (isDark ? SCHEMES[schemeId].dark : SCHEMES[schemeId].light),
+    [schemeId, isDark]
+  );
 
   const toggle = () => {
-    setUserToggled(true);
-    setIsDark((p) => !p);
+    const next = !isDark;
+    setDarkOverride(next);
+    persist({ dark: next });
+  };
+
+  const setScheme = (id: SchemeId) => {
+    setSchemeId(id);
+    persist({ scheme: id });
   };
 
   return (
-    <ThemeContext.Provider value={{ theme, isDark, toggle }}>
+    <ThemeContext.Provider value={{ theme, isDark, toggle, schemeId, setScheme, hydrating }}>
       {children}
     </ThemeContext.Provider>
   );

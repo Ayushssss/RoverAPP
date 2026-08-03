@@ -1,97 +1,217 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import {
+  View, Text, FlatList, Modal, KeyboardAvoidingView, Platform, Pressable,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { clusters as clustersApi } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
+import { rem, spacing, radii, type, elevation } from '../theme';
+import { Screen, ScreenHeader, IconButton, Field, Button, Press, FadeIn, EmptyState } from '../components/ui';
+import { useToast } from '../components/Toast';
+import { Skeleton } from '../components/Skeleton';
+import { ClusterArt } from '../components/Illustrations';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Clusters'>;
-interface Cluster { id: string; name: string; description: string; }
+interface Cluster { id: string; name: string; description: string }
 
 export default function ClustersScreen() {
   const nav = useNavigation<Nav>();
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const toast = useToast();
+
   const [clusterList, setClusterList] = useState<Cluster[]>([]);
+  const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
-  const load = async () => { try { setClusterList(await clustersApi.list()); } catch {} };
-  useFocusEffect(useCallback(() => { load(); }, []));
+  const [saving, setSaving] = useState(false);
+  const [nameError, setNameError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      setClusterList((await clustersApi.list()) || []);
+    } catch (e) {
+      console.warn('clusters: fetch failed', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setNewName('');
+    setNewDesc('');
+    setNameError('');
+  };
+
   const create = async () => {
-    if (!newName.trim()) { Alert.alert('', 'Name required'); return; }
-    try { await clustersApi.create({ name: newName.trim(), description: newDesc.trim() }); setModalVisible(false); setNewName(''); setNewDesc(''); load();
-    } catch (e: any) { Alert.alert('Error', e?.message || e?.response?.data?.error || 'Failed'); }
+    if (!newName.trim()) {
+      setNameError('Name this cluster');
+      return;
+    }
+    setSaving(true);
+    const label = newName.trim();
+    try {
+      await clustersApi.create({ name: label, description: newDesc.trim() });
+      closeModal();
+      load();
+      toast.success(`Cluster “${label}” created`);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || e?.message || 'Could not create that cluster');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => nav.goBack()} style={[styles.backBtn, { backgroundColor: theme.surface, borderColor: theme.border }]}><Text style={[styles.backArrow, { color: theme.text }]}>←</Text></TouchableOpacity>
-        <Text style={[styles.title, { color: theme.text }]}>Clusters</Text>
-        <TouchableOpacity onPress={() => setModalVisible(true)} style={[styles.addBtn, { backgroundColor: theme.primaryDim }]}><Text style={[styles.addIcon, { color: theme.primary }]}>+</Text></TouchableOpacity>
-      </View>
-      <FlatList
-        data={clusterList} keyExtractor={item => item.id}
-        contentContainerStyle={clusterList.length === 0 ? styles.emptyContainer : styles.list}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <View style={[styles.emptyIconWrap, { backgroundColor: theme.surface, borderColor: theme.border }]}><Text style={[styles.emptyIcon, { color: theme.textMuted }]}>⊞</Text></View>
-            <Text style={[styles.emptyTitle, { color: theme.textDim }]}>No clusters</Text>
-            <Text style={[styles.emptySub, { color: theme.textMuted }]}>Group devices into clusters</Text>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <View style={[styles.cardIcon, { backgroundColor: theme.primaryDim }]}><Text style={[styles.cardIconText, { color: theme.primary }]}>⊞</Text></View>
-            <View style={styles.cardBody}><Text style={[styles.cardName, { color: theme.text }]}>{item.name}</Text>{item.description ? <Text style={[styles.cardDesc, { color: theme.textDim }]}>{item.description}</Text> : null}</View>
-          </View>
-        )}
+    <Screen>
+      <ScreenHeader
+        title="Clusters"
+        subtitle={loading ? undefined : `${clusterList.length} group${clusterList.length === 1 ? '' : 's'}`}
+        onBack={() => nav.goBack()}
+        right={<IconButton icon="plus" onPress={() => setModalVisible(true)} label="New cluster" />}
       />
-      <Modal visible={modalVisible} transparent animationType="fade">
-        <View style={styles.overlay}>
-          <View style={[styles.modal, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>New cluster</Text>
-            <TextInput style={[styles.modalInput, { backgroundColor: theme.bg, borderColor: theme.border, color: theme.text }]} placeholder="Cluster name" placeholderTextColor={theme.textMuted} value={newName} onChangeText={setNewName} />
-            <TextInput style={[styles.modalInput, { backgroundColor: theme.bg, borderColor: theme.border, color: theme.text }]} placeholder="Description" placeholderTextColor={theme.textMuted} value={newDesc} onChangeText={setNewDesc} />
-            <View style={styles.modalActions}>
-              <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.cancelBtn}><Text style={[styles.cancelText, { color: theme.textDim }]}>Cancel</Text></TouchableOpacity>
-              <TouchableOpacity onPress={create} style={styles.confirmBtn}>
-                <LinearGradient colors={[theme.primary, theme.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.confirmGrad}>
-                  <Text style={styles.confirmText}>Create</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+
+      {loading ? (
+        <View style={{ padding: rem(spacing.xl), gap: rem(spacing.md) }}>
+          {[0, 1, 2].map((i) => (
+            <View
+              key={i}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                padding: rem(spacing.lg), backgroundColor: theme.surface,
+                borderRadius: radii.xl, borderWidth: 1, borderColor: theme.border,
+              }}
+            >
+              <Skeleton width={rem(44)} height={rem(44)} radius={radii.md} />
+              <View style={{ flex: 1, gap: rem(7) }}>
+                <Skeleton width="45%" height={rem(14)} radius={6} />
+                <Skeleton width="70%" height={rem(10)} radius={5} />
+              </View>
             </View>
-          </View>
+          ))}
         </View>
+      ) : (
+        <FlatList
+          data={clusterList}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{
+            padding: rem(spacing.xl),
+            paddingBottom: insets.bottom + rem(spacing.xxl),
+            flexGrow: 1,
+          }}
+          ItemSeparatorComponent={() => <View style={{ height: rem(spacing.md) }} />}
+          ListEmptyComponent={
+            <View style={{ flex: 1, justifyContent: 'center' }}>
+              <EmptyState
+                art={<ClusterArt size={rem(180)} />}
+                title="Nothing grouped yet"
+                body="Clusters let you send one command to every rover working the same block."
+                actionLabel="Create a cluster"
+                onAction={() => setModalVisible(true)}
+              />
+            </View>
+          }
+          renderItem={({ item, index }) => (
+            <FadeIn index={index}>
+              <View
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: rem(spacing.md),
+                  padding: rem(spacing.lg), backgroundColor: theme.surface,
+                  borderRadius: radii.xl, borderWidth: 1, borderColor: theme.border,
+                }}
+              >
+                <View
+                  style={{
+                    width: rem(44), height: rem(44), borderRadius: radii.md,
+                    backgroundColor: theme.accentDim, alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <MaterialCommunityIcons name="sitemap-outline" size={rem(21)} color={theme.accentTint} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ ...type.subheading, color: theme.text }} numberOfLines={1}>{item.name}</Text>
+                  {!!item.description && (
+                    <Text style={{ ...type.caption, color: theme.textDim, marginTop: 2 }} numberOfLines={2}>
+                      {item.description}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </FadeIn>
+          )}
+        />
+      )}
+
+      <Modal visible={modalVisible} transparent animationType="fade" onRequestClose={closeModal}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Pressable
+            style={{ flex: 1, backgroundColor: theme.scrim, justifyContent: 'center', padding: rem(spacing.xl) }}
+            onPress={closeModal}
+          >
+            <Pressable
+              onPress={(e) => e.stopPropagation()}
+              style={{
+                backgroundColor: theme.surface,
+                borderRadius: radii.xxl,
+                borderWidth: 1,
+                borderColor: theme.border,
+                padding: rem(spacing.xl),
+                gap: rem(18),
+                ...elevation(theme.shadow, 3),
+              }}
+            >
+              <View>
+                <Text style={{ ...type.heading, color: theme.text }}>New cluster</Text>
+                <Text style={{ ...type.caption, color: theme.textDim, marginTop: 2 }}>
+                  Group rovers that work the same ground.
+                </Text>
+              </View>
+
+              <Field
+                label="Name"
+                value={newName}
+                onChangeText={(t) => { setNewName(t); if (nameError) setNameError(''); }}
+                placeholder="North block"
+                autoCapitalize="words"
+                error={nameError}
+              />
+              <Field
+                label="Description"
+                value={newDesc}
+                onChangeText={setNewDesc}
+                placeholder="Optional — what this group covers"
+                autoCapitalize="words"
+              />
+
+              <View style={{ flexDirection: 'row', gap: rem(spacing.md), marginTop: rem(spacing.xs) }}>
+                <Press onPress={closeModal} style={{ flex: 1 }}>
+                  <View
+                    style={{
+                      minHeight: 52, borderRadius: radii.lg, borderWidth: 1,
+                      borderColor: theme.borderStrong, alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ fontSize: rem(15), fontWeight: '600', color: theme.textSecondary }}>Cancel</Text>
+                  </View>
+                </Press>
+                <Button label="Create" onPress={create} loading={saving} style={{ flex: 1 }} full={false} />
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
-    </View>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 56, paddingBottom: 8 },
-  backBtn: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  backArrow: { fontSize: 20 }, title: { fontSize: 18, fontWeight: '600', letterSpacing: -0.3 },
-  addBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  addIcon: { fontSize: 22 },
-  list: { paddingHorizontal: 24, paddingBottom: 100 }, emptyContainer: { flex: 1, justifyContent: 'center' },
-  empty: { alignItems: 'center' },
-  emptyIconWrap: { width: 72, height: 72, borderRadius: 36, borderWidth: 1, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  emptyIcon: { fontSize: 32 },
-  emptyTitle: { fontSize: 18, fontWeight: '600' }, emptySub: { fontSize: 13, marginTop: 4 },
-  card: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 10 },
-  cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  cardIconText: { fontSize: 20 }, cardBody: { flex: 1 },
-  cardName: { fontSize: 15, fontWeight: '600' }, cardDesc: { fontSize: 12, marginTop: 2 },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 24 },
-  modal: { borderRadius: 20, padding: 24, borderWidth: 1 },
-  modalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 20, letterSpacing: -0.3 },
-  modalInput: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15, marginBottom: 12 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 },
-  cancelBtn: { padding: 12 }, cancelText: { fontSize: 14 },
-  confirmBtn: { borderRadius: 12, overflow: 'hidden' }, confirmGrad: { paddingHorizontal: 20, paddingVertical: 12 },
-  confirmText: { fontSize: 14, fontWeight: '600', color: '#fff' },
-});

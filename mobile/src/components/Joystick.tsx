@@ -1,94 +1,196 @@
-import React, { useRef, useEffect } from 'react';
-import { View, PanResponder, StyleSheet, Dimensions, Animated, Platform } from 'react-native';
-import Svg, { Circle, Defs, RadialGradient, Stop, Line, G } from 'react-native-svg';
+import React, { useCallback, useEffect, useMemo } from 'react';
+import { View, Dimensions } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withSpring, withTiming, withRepeat,
+  interpolate, runOnJS, Extrapolation,
+} from 'react-native-reanimated';
+import Svg, { Circle, Line, Defs, RadialGradient, Stop } from 'react-native-svg';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../context/ThemeContext';
+import { springs, timings, useReducedMotion } from '../motion';
 
-const SIZE = Math.min(Dimensions.get('window').width * 0.72, 290);
-const KNOB_SIZE = 60;
 const DEAD_ZONE = 0.06;
+/** Emit at ~25Hz. 60Hz floods both the websocket and the React render loop. */
+const EMIT_INTERVAL_MS = 40;
 
-interface JoystickProps { onMove: (x: number, y: number) => void; onRelease?: () => void; }
+interface JoystickProps {
+  onMove: (x: number, y: number) => void;
+  onRelease?: () => void;
+  size?: number;
+}
 
-export default function Joystick({ onMove, onRelease }: JoystickProps) {
+/**
+ * Relative analog stick: the knob tracks the drag delta from wherever the
+ * finger landed, so grabbing the edge of the pad doesn't snap the rover.
+ *
+ * Tracking runs entirely in a worklet on the UI thread — the knob keeps up at
+ * 60fps even while JS is blocked fetching or reconnecting the socket. Only the
+ * throttled coordinate emit crosses back to JS.
+ */
+function Joystick({ onMove, onRelease, size }: JoystickProps) {
   const { theme } = useTheme();
-  const knobPos = useRef({ x: 0, y: 0 });
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const [, forceUpdate] = React.useState(0);
+  const reduced = useReducedMotion();
+
+  const SIZE = size ?? Math.min(Dimensions.get('window').width * 0.72, 290);
+  const KNOB = Math.round(SIZE * 0.23);
+  const RADIUS = SIZE / 2 - KNOB / 2;
+
+  const tx = useSharedValue(0);
+  const ty = useSharedValue(0);
+  const active = useSharedValue(0);
+  const idle = useSharedValue(1);
+  const lastEmit = useSharedValue(0);
 
   useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 0.92, duration: 2000, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 2000, useNativeDriver: Platform.OS !== 'web' }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, []);
+    if (reduced) {
+      idle.value = 0.6;
+      return;
+    }
+    idle.value = withRepeat(withTiming(0.35, { ...timings.loop, duration: 1800 }), -1, true);
+  }, [reduced]);
 
-  const panResponder = useRef(PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => forceUpdate(n => n + 1),
-    onPanResponderMove: (_, gesture) => {
-      const radius = SIZE / 2 - KNOB_SIZE / 2;
-      let dx = gesture.moveX - gesture.x0;
-      let dy = gesture.moveY - gesture.y0;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > radius) { dx = (dx / dist) * radius; dy = (dy / dist) * radius; }
-      knobPos.current = { x: dx, y: dy };
-      const nx = Math.max(-1, Math.min(1, dx / radius));
-      const ny = Math.max(-1, Math.min(1, -dy / radius));
-      if (Math.abs(nx) > DEAD_ZONE || Math.abs(ny) > DEAD_ZONE) onMove(nx, ny);
-      else onMove(0, 0);
-      forceUpdate(n => n + 1);
-    },
-    onPanResponderRelease: () => {
-      knobPos.current = { x: 0, y: 0 }; onMove(0, 0); onRelease?.(); forceUpdate(n => n + 1);
-    },
-  })).current;
+  const emit = useCallback((x: number, y: number) => onMove(x, y), [onMove]);
+  const finish = useCallback(() => {
+    onMove(0, 0);
+    onRelease?.();
+  }, [onMove, onRelease]);
 
-  const cx = SIZE / 2, cy = SIZE / 2, r = SIZE / 2 - 2;
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .onBegin(() => {
+          active.value = withSpring(1, springs.press);
+        })
+        .onUpdate((e) => {
+          let dx = e.translationX;
+          let dy = e.translationY;
+
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > RADIUS) {
+            dx = (dx / dist) * RADIUS;
+            dy = (dy / dist) * RADIUS;
+          }
+          tx.value = dx;
+          ty.value = dy;
+
+          let nx = Math.max(-1, Math.min(1, dx / RADIUS));
+          let ny = Math.max(-1, Math.min(1, -dy / RADIUS));
+          if (Math.abs(nx) <= DEAD_ZONE && Math.abs(ny) <= DEAD_ZONE) {
+            nx = 0;
+            ny = 0;
+          }
+
+          const now = Date.now();
+          if (now - lastEmit.value >= EMIT_INTERVAL_MS) {
+            lastEmit.value = now;
+            runOnJS(emit)(nx, ny);
+          }
+        })
+        .onFinalize(() => {
+          tx.value = withSpring(0, springs.snap);
+          ty.value = withSpring(0, springs.snap);
+          active.value = withSpring(0, springs.press);
+          lastEmit.value = 0;
+          runOnJS(finish)();
+        }),
+    [RADIUS, emit, finish]
+  );
+
+  const knobStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: tx.value },
+      { translateY: ty.value },
+      { scale: interpolate(active.value, [0, 1], [1, 1.08], Extrapolation.CLAMP) },
+    ],
+  }));
+
+  // The idle breath stops the moment you grab the stick — it signals "ready",
+  // and a control that keeps breathing while in use reads as noise.
+  const ringStyle = useAnimatedStyle(() => ({
+    opacity: idle.value * (1 - active.value),
+    transform: [
+      { translateX: tx.value },
+      { translateY: ty.value },
+      { scale: interpolate(idle.value, [0.35, 1], [1.15, 0.95], Extrapolation.CLAMP) },
+    ],
+  }));
+
+  const c = SIZE / 2;
+  const plateR = SIZE / 2 - 2;
+  const tick = SIZE / 3.4;
 
   return (
-    <Animated.View style={[styles.wrapper, { transform: [{ scale: pulseAnim }] }]} {...panResponder.panHandlers}>
-      <Svg width={SIZE} height={SIZE}>
-        <Defs>
-          <RadialGradient id="outerGlow" cx="50%" cy="50%" r="50%">
-            <Stop offset="0%" stopColor={theme.primary} stopOpacity="0.2" />
-            <Stop offset="70%" stopColor={theme.primary} stopOpacity="0.05" />
-            <Stop offset="100%" stopColor="transparent" stopOpacity="0" />
-          </RadialGradient>
-          <RadialGradient id="knobGrad" cx="40%" cy="35%" r="60%">
-            <Stop offset="0%" stopColor="#fff" stopOpacity="0.3" />
-            <Stop offset="40%" stopColor={theme.primary} stopOpacity="0.6" />
-            <Stop offset="100%" stopColor={theme.surfaceElevated} stopOpacity="0.8" />
-          </RadialGradient>
-          <RadialGradient id="innerGlow" cx="50%" cy="50%" r="50%">
-            <Stop offset="0%" stopColor={theme.primary} stopOpacity="0.15" />
-            <Stop offset="100%" stopColor="transparent" stopOpacity="0" />
-          </RadialGradient>
-        </Defs>
+    <GestureDetector gesture={pan}>
+      <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={SIZE} height={SIZE} style={{ position: 'absolute' }}>
+          <Defs>
+            <RadialGradient id="plate" cx="50%" cy="45%" r="55%">
+              <Stop offset="0%" stopColor={theme.primaryTint} stopOpacity="0.10" />
+              <Stop offset="70%" stopColor={theme.primaryTint} stopOpacity="0.03" />
+              <Stop offset="100%" stopColor={theme.primaryTint} stopOpacity="0" />
+            </RadialGradient>
+          </Defs>
 
-        <Circle cx={cx} cy={cy} r={r} fill="none" stroke={theme.border} strokeWidth={1.5} />
-        <Circle cx={cx} cy={cy} r={r + 10} fill="url(#outerGlow)" />
+          <Circle cx={c} cy={c} r={plateR} fill="url(#plate)" />
+          <Circle cx={c} cy={c} r={plateR} fill="none" stroke={theme.border} strokeWidth={1.5} />
+          <Circle cx={c} cy={c} r={plateR * 0.62} fill="none" stroke={theme.border} strokeWidth={1} strokeDasharray="3 7" />
 
-        <Circle cx={cx} cy={cy} r={20} fill="url(#innerGlow)" />
-        <Line x1={cx - SIZE / 3.5} y1={cy} x2={cx + SIZE / 3.5} y2={cy} stroke={theme.border} strokeWidth={0.8} strokeOpacity={0.5} />
-        <Line x1={cx} y1={cy - SIZE / 3.5} x2={cx} y2={cy + SIZE / 3.5} stroke={theme.border} strokeWidth={0.8} strokeOpacity={0.5} />
+          <Line x1={c - tick} y1={c} x2={c - tick * 0.72} y2={c} stroke={theme.textMuted} strokeWidth={1.5} strokeLinecap="round" />
+          <Line x1={c + tick * 0.72} y1={c} x2={c + tick} y2={c} stroke={theme.textMuted} strokeWidth={1.5} strokeLinecap="round" />
+          <Line x1={c} y1={c - tick} x2={c} y2={c - tick * 0.72} stroke={theme.textMuted} strokeWidth={1.5} strokeLinecap="round" />
+          <Line x1={c} y1={c + tick * 0.72} x2={c} y2={c + tick} stroke={theme.textMuted} strokeWidth={1.5} strokeLinecap="round" />
+        </Svg>
 
-        <Circle cx={cx} cy={cy} r={4} fill={theme.textMuted} />
+        <Animated.View
+          style={[
+            {
+              pointerEvents: 'none',
+              position: 'absolute',
+              width: KNOB * 1.6,
+              height: KNOB * 1.6,
+              borderRadius: KNOB * 0.8,
+              borderWidth: 1,
+              borderColor: theme.primaryTint,
+            },
+            ringStyle,
+          ]}
+        />
 
-        <G x={knobPos.current.x} y={knobPos.current.y}>
-          <Circle cx={cx} cy={cy} r={KNOB_SIZE / 2 + 4} fill={theme.primary + '10'} />
-          <Circle cx={cx} cy={cy} r={KNOB_SIZE / 2} fill="url(#knobGrad)" stroke={theme.primary} strokeWidth={1.5} />
-          <Circle cx={cx - 3} cy={cy - 3} r={KNOB_SIZE / 5} fill="rgba(255,255,255,0.15)" />
-        </G>
-      </Svg>
-    </Animated.View>
+        <Animated.View
+          style={[
+            {
+              pointerEvents: 'none',
+              position: 'absolute',
+              width: KNOB,
+              height: KNOB,
+              borderRadius: KNOB / 2,
+              overflow: 'hidden',
+              borderWidth: 1.5,
+              borderColor: theme.accent,
+            },
+            knobStyle,
+          ]}
+        >
+          <LinearGradient
+            colors={['#D9683C', '#A6482A']}
+            start={{ x: 0.25, y: 0 }}
+            end={{ x: 0.75, y: 1 }}
+            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+          >
+            <View
+              style={{
+                width: KNOB * 0.26,
+                height: KNOB * 0.26,
+                borderRadius: KNOB * 0.13,
+                backgroundColor: 'rgba(255,247,237,0.55)',
+              }}
+            />
+          </LinearGradient>
+        </Animated.View>
+      </View>
+    </GestureDetector>
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper: { width: SIZE, height: SIZE, alignSelf: 'center', justifyContent: 'center', alignItems: 'center' },
-});
+export default React.memo(Joystick);

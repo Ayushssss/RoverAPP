@@ -1,107 +1,123 @@
-import React, { useState, useRef, useEffect } from 'react';
-import {
-  View, Text, TouchableOpacity, Animated, Modal, Pressable, Dimensions, Platform,
-} from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, Modal, Pressable, useWindowDimensions } from 'react-native';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withTiming, withSpring, interpolate,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
+import { rem, spacing, radii, type, elevation } from '../theme';
+import { springs, timings } from '../motion';
+import Glass from './Glass';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const M_W = Math.min(SCREEN_W - 32, 280);
-
-const groups = [
-  {
-    items: [
-      { label: 'Home', icon: 'view-dashboard-outline', screen: 'Home' },
-      { label: 'Rovers', icon: 'robot-outline', screen: 'Rovers' },
-    ],
-  },
-  {
-    items: [
-      { label: 'Add Device', icon: 'plus-circle-outline', screen: 'AddDevice' },
-      { label: 'Clusters', icon: 'sitemap-outline', screen: 'Clusters' },
-    ],
-  },
-  {
-    items: [
-      { label: 'Profile', icon: 'account-outline', screen: 'Profile' },
-      { label: 'Settings', icon: 'cog-outline', screen: 'Settings' },
-    ],
-  },
-];
+const GROUPS = [
+  [
+    { label: 'Dashboard', icon: 'view-dashboard-outline', screen: 'Home' },
+    { label: 'Rovers', icon: 'robot-outline', screen: 'Rovers' },
+  ],
+  [
+    { label: 'Add rover', icon: 'plus-circle-outline', screen: 'AddDevice' },
+    { label: 'Clusters', icon: 'sitemap-outline', screen: 'Clusters' },
+  ],
+  [
+    { label: 'Profile', icon: 'account-outline', screen: 'Profile' },
+    { label: 'Settings', icon: 'cog-outline', screen: 'Settings' },
+  ],
+] as const;
 
 export default function DropdownMenu() {
   const [open, setOpen] = useState(false);
   const nav = useNavigation<any>();
-  const { theme, isDark } = useTheme();
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
-  const fade = useRef(new Animated.Value(0)).current;
-  const slide = useRef(new Animated.Value(-16)).current;
+  const { width: winW } = useWindowDimensions();
+
+  const progress = useSharedValue(0);
 
   useEffect(() => {
     if (open) {
-      Animated.parallel([
-        Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(slide, { toValue: 0, duration: 220, useNativeDriver: Platform.OS !== 'web' }),
-      ]).start();
+      progress.value = withSpring(1, springs.snap);
     } else {
-      fade.setValue(0);
-      slide.setValue(-16);
+      progress.value = withTiming(0, timings.exit);
     }
   }, [open]);
 
-  const handleNav = (screen: string) => {
+  // Grows from the top-right corner, where the trigger sits, so the panel
+  // reads as coming out of the button rather than appearing from nowhere.
+  const panelStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [
+      { translateY: interpolate(progress.value, [0, 1], [-14, 0]) },
+      { scale: interpolate(progress.value, [0, 1], [0.92, 1]) },
+    ],
+  }));
+
+  const go = (screen: string) => {
     setOpen(false);
     setTimeout(() => {
-      try { nav.navigate(screen as any); } catch {}
-    }, 200);
+      try { nav.navigate(screen as never); } catch {}
+    }, 180);
   };
 
   return (
     <>
-      <TouchableOpacity
+      <Pressable
         onPress={() => setOpen(true)}
-        activeOpacity={0.7}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel="Open menu"
+        hitSlop={10}
         style={{
-          width: 38, height: 38, borderRadius: 11,
-          justifyContent: 'center', alignItems: 'center',
-          backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+          width: 38, height: 38, borderRadius: radii.md,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: theme.surface,
+          borderWidth: 1, borderColor: theme.border,
         }}
       >
-        <MaterialCommunityIcons name="menu" size={20} color={theme.text} />
-      </TouchableOpacity>
+        <MaterialCommunityIcons name="menu" size={rem(19)} color={theme.text} />
+      </Pressable>
 
       <Modal visible={open} transparent animationType="none" onRequestClose={() => setOpen(false)}>
         <Pressable style={{ flex: 1 }} onPress={() => setOpen(false)}>
           <Animated.View
-            style={{
-              position: 'absolute', top: insets.top + 52, right: 16, width: M_W,
-              backgroundColor: isDark ? '#1B2336' : '#FFFFFF',
-              borderRadius: 20, borderWidth: 1, borderColor: theme.border,
-              paddingVertical: 6,
-              opacity: fade, transform: [{ translateY: slide }],
-              shadowColor: '#000', shadowOffset: { width: 0, height: 16 },
-              shadowOpacity: isDark ? 0.5 : 0.1, shadowRadius: 32, elevation: 24,
-            }}
+            style={[
+              {
+                position: 'absolute',
+                top: insets.top + rem(54),
+                right: rem(spacing.lg),
+                width: Math.min(winW - rem(spacing.xxl), rem(264)),
+                transformOrigin: 'top right',
+                ...elevation(theme.shadow, 3),
+              },
+              panelStyle,
+            ]}
           >
-            {groups.map((group, gi) => (
+            <Glass radius={radii.xxl} style={{ paddingVertical: rem(6) }}>
+            {GROUPS.map((group, gi) => (
               <View key={gi}>
-                {gi > 0 && <View style={{ height: 1, backgroundColor: theme.border, marginVertical: 4, marginHorizontal: 14 }} />}
-                {group.items.map((item) => (
-                  <TouchableOpacity
+                {gi > 0 && (
+                  <View style={{ height: 1, backgroundColor: theme.border, marginVertical: rem(5), marginHorizontal: rem(spacing.lg) }} />
+                )}
+                {group.map((item) => (
+                  <Pressable
                     key={item.screen}
-                    onPress={() => handleNav(item.screen)}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 18 }}
-                    activeOpacity={0.5}
+                    onPress={() => go(item.screen)}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: rem(spacing.md),
+                      paddingVertical: rem(12),
+                      paddingHorizontal: rem(spacing.lg),
+                      backgroundColor: pressed ? theme.primaryDim : 'transparent',
+                    })}
                   >
-                    <MaterialCommunityIcons name={item.icon as any} size={19} color={theme.textDim} />
-                    <Text style={{ fontSize: 14, fontWeight: '500', color: theme.text }}>{item.label}</Text>
-                  </TouchableOpacity>
+                    <MaterialCommunityIcons name={item.icon} size={rem(18)} color={theme.textDim} />
+                    <Text style={{ ...type.body, fontWeight: '500', color: theme.text }}>{item.label}</Text>
+                  </Pressable>
                 ))}
               </View>
             ))}
+            </Glass>
           </Animated.View>
         </Pressable>
       </Modal>
