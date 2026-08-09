@@ -8,7 +8,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import {
   acquireSocket, releaseSocket, registerDevice, sendJoystick, sendCommand,
-  onConnectionChange, onTelemetry, onBoards, type BoardInfo,
+  onConnectionChange, onTelemetry, onBoards, onControllerInput, type BoardInfo,
 } from '../services/websocket';
 import Joystick from '../components/Joystick';
 import { useTheme } from '../context/ThemeContext';
@@ -207,12 +207,18 @@ export default function ControlScreen() {
       if (mounted) setReadings((prev) => ({ ...prev, ...next }));
     });
     const offBoards = onBoards(macAddress, (list) => { if (mounted) setBoards(list); });
+    // A paired tilt controller steers the same rover. Mirroring its input
+    // keeps the readout honest rather than showing zero while it moves.
+    const offInput = onControllerInput(macAddress, (x, y) => {
+      if (mounted) setCoords({ x, y });
+    });
 
     return () => {
       mounted = false;
       unsubscribe();
       offTelemetry();
       offBoards();
+      offInput();
       releaseSocket();
     };
   }, [macAddress]);

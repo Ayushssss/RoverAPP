@@ -163,7 +163,7 @@ export function stopCamera(macAddress: string) {
 
 /* ────────────────────────── boards & sensors ────────────────────────── */
 
-export type BoardRole = 'rover' | 'camera' | 'sensor';
+export type BoardRole = 'rover' | 'camera' | 'sensor' | 'controller';
 
 export interface BoardInfo {
   mac: string;
@@ -200,6 +200,23 @@ export function onTelemetry(
   };
   socket?.on('telemetry', handler);
   return () => { socket?.off('telemetry', handler); };
+}
+
+/**
+ * Drive input from a physical tilt controller, if one is paired.
+ *
+ * Mirrored so the on-screen readout follows whoever is actually steering —
+ * otherwise the X/Y figures sit at zero while the rover visibly moves.
+ */
+export function onControllerInput(
+  macAddress: string,
+  listener: (x: number, y: number) => void
+): () => void {
+  const handler = (data: { macAddress: string; x: number; y: number }) => {
+    if (data.macAddress.toUpperCase() === macAddress.toUpperCase()) listener(data.x, data.y);
+  };
+  socket?.on('controller-input', handler);
+  return () => { socket?.off('controller-input', handler); };
 }
 
 /**

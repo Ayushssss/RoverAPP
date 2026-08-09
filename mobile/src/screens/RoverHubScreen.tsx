@@ -20,6 +20,7 @@ const ROLE_LABEL: Record<BoardInfo['role'], { label: string; icon: IconName }> =
   rover: { label: 'Drive board', icon: 'chip' },
   camera: { label: 'Camera', icon: 'camera-outline' },
   sensor: { label: 'Sensor hub', icon: 'thermometer' },
+  controller: { label: 'Tilt controller', icon: 'gesture-tap-button' },
 };
 
 /**
