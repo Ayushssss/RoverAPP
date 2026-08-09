@@ -36,7 +36,7 @@ const char* WIFI_SSID = "ANANYA";
 const char* WIFI_PASS = "satish.m";
 
 // ── Server ──
-const char* WS_HOST = "roverapp.onrender.com";
+const char* WS_HOST = "roverapp-3b7v.onrender.com";
 const int   WS_PORT = 443;
 const char* WS_PATH = "/ws/esp32";
 
@@ -443,12 +443,30 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   Serial.print("[ntp] syncing");
   time_t now = 0;
-  while (now < 100000) {
+  /*
+    Bounded, not endless.
+
+    NTP only resolves if the network actually reaches the internet. A phone
+    hotspot with mobile data switched off, or a carrier blocking UDP 123, will
+    associate perfectly and never sync — and an unbounded loop here turns that
+    into a board that prints dots forever and looks dead. Twenty seconds is
+    far longer than a working sync needs.
+  */
+  const unsigned long ntpStarted = millis();
+  while (now < 100000 && millis() - ntpStarted < 20000) {
     time(&now);
     delay(500);
     Serial.print(".");
   }
-  Serial.println(" done");
+
+  if (now < 100000) {
+    Serial.println(" TIMED OUT");
+    Serial.println("[ntp] no time source — the network is up but has no internet path.");
+    Serial.println("[ntp] on a phone hotspot, check mobile data is actually on.");
+    Serial.println("[ntp] continuing anyway; a wrong clock only affects TLS validation.");
+  } else {
+    Serial.println(" done");
+  }
 
   Serial.printf("[ws] connecting to wss://%s%s\n", WS_HOST, WS_PATH);
   /*
