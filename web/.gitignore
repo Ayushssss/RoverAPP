@@ -1,0 +1,10 @@
+# Local environment. `.env.example` is the committed template; anything with
+# real values stays here. The root .gitignore only covers a bare `.env`, which
+# would let `.env.local` through.
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+.vite/

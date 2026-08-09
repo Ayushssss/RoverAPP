@@ -1,0 +1,320 @@
+@import 'tailwindcss';
+
+/*
+  Colour is role-based, exactly as in the mobile app's design system: components
+  never reach for a hex value, they read a role. That is what lets the whole
+  console re-skin from one `data-scheme` attribute on <html> without a single
+  component knowing which palette is live.
+
+  The five schemes and their seeds are the same ones shipped on mobile
+  (mobile/src/theme/schemes.ts) so a rover looks like the same machine in both
+  places.
+*/
+
+@theme {
+  --color-bg: var(--c-bg);
+  --color-sunken: var(--c-sunken);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+
+  --color-primary: var(--c-primary);
+  --color-primary-pressed: var(--c-primary-pressed);
+  --color-primary-tint: var(--c-primary-tint);
+  --color-primary-on: var(--c-primary-on);
+  --color-primary-dim: var(--c-primary-dim);
+
+  --color-accent: var(--c-accent);
+  --color-accent-tint: var(--c-accent-tint);
+  --color-accent-dim: var(--c-accent-dim);
+
+  --color-ok: var(--c-ok);
+  --color-ok-tint: var(--c-ok-tint);
+  --color-ok-dim: var(--c-ok-dim);
+
+  --color-bad: #dc2626;
+  --color-bad-tint: var(--c-bad-tint);
+  --color-bad-dim: var(--c-bad-dim);
+
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-ink-dim: var(--c-ink-dim);
+  --color-ink-muted: var(--c-ink-muted);
+
+  /*
+    Chart series hue — a separate role from `primary-tint` on purpose.
+
+    `primary-tint` is a *text* colour, lifted for contrast, and every scheme's
+    tint measures L 0.71–0.79 — above the 0.48–0.67 band a dark-surface data
+    mark should sit in, where it blooms instead of reading as a line. These five
+    are the same hues re-stepped into the band and validated per scheme against
+    that scheme's own surface (lightness, chroma floor, ≥3:1 contrast).
+  */
+  --color-series: var(--c-series);
+  --color-grid: var(--c-grid);
+
+  --font-sans:
+    'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', 'Roboto Mono', monospace;
+
+  --radius-card: 1.25rem;
+  --radius-sheet: 1.75rem;
+
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Terracotta · dark (default) ─────────────────────────────────── */
+:root,
+[data-scheme='terracotta'] {
+  --c-bg: #0b0f1c;
+  --c-sunken: #070a14;
+  --c-surface: #161b2e;
+  --c-raised: #1e2538;
+  --c-ink-rgb: 255, 247, 237;
+  --c-ink: #fff7ed;
+  --c-primary: #b8532e;
+  --c-primary-pressed: #9c4426;
+  --c-primary-tint: #e8825a;
+  --c-primary-on: #fff7ed;
+  --c-primary-dim: rgb(232 130 90 / 0.14);
+  --c-accent: #d4a53a;
+  --c-accent-tint: #d4a53a;
+  --c-accent-dim: rgb(212 165 58 / 0.14);
+  --c-ok: #3f8f5f;
+  --c-ok-tint: #57b97d;
+  --c-ok-dim: rgb(87 185 125 / 0.14);
+  --c-bad-tint: #f08a80;
+  --c-bad-dim: rgb(220 38 38 / 0.12);
+  --c-shadow: 4 6 12;
+  --c-series: #c96a44;
+}
+
+[data-scheme='midnight'] {
+  --c-bg: #080b14;
+  --c-sunken: #05070e;
+  --c-surface: #121826;
+  --c-raised: #1a2233;
+  --c-ink-rgb: 232, 238, 249;
+  --c-ink: #e8eef9;
+  --c-primary: #2563eb;
+  --c-primary-pressed: #1d4ed8;
+  --c-primary-tint: #7da9ff;
+  --c-primary-on: #f5f9ff;
+  --c-primary-dim: rgb(125 169 255 / 0.14);
+  --c-accent: #22d3ee;
+  --c-accent-tint: #4fe0f5;
+  --c-accent-dim: rgb(34 211 238 / 0.14);
+  --c-ok: #2f8f57;
+  --c-ok-tint: #4ade80;
+  --c-ok-dim: rgb(74 222 128 / 0.14);
+  --c-bad-tint: #f08a80;
+  --c-bad-dim: rgb(220 38 38 / 0.12);
+  --c-shadow: 2 4 10;
+  --c-series: #5b8ce8;
+}
+
+[data-scheme='meadow'] {
+  --c-bg: #08120c;
+  --c-sunken: #050d08;
+  --c-surface: #12211a;
+  --c-raised: #1a2c22;
+  --c-ink-rgb: 234, 246, 238;
+  --c-ink: #eaf6ee;
+  --c-primary: #2f8f57;
+  --c-primary-pressed: #237045;
+  --c-primary-tint: #5fbf84;
+  --c-primary-on: #f2fbf5;
+  --c-primary-dim: rgb(95 191 132 / 0.14);
+  --c-accent: #a3b324;
+  --c-accent-tint: #c3d34a;
+  --c-accent-dim: rgb(163 179 36 / 0.14);
+  --c-ok: #2f8f57;
+  --c-ok-tint: #5fbf84;
+  --c-ok-dim: rgb(95 191 132 / 0.14);
+  --c-bad-tint: #f08a80;
+  --c-bad-dim: rgb(220 38 38 / 0.12);
+  --c-shadow: 2 8 6;
+  --c-series: #45a96c;
+}
+
+[data-scheme='ember'] {
+  --c-bg: #140a0a;
+  --c-sunken: #0d0605;
+  --c-surface: #241413;
+  --c-raised: #2f1b19;
+  --c-ink-rgb: 253, 236, 228;
+  --c-ink: #fdece4;
+  --c-primary: #c2410c;
+  --c-primary-pressed: #9a3412;
+  --c-primary-tint: #fb8c5a;
+  --c-primary-on: #fff6f2;
+  --c-primary-dim: rgb(251 140 90 / 0.14);
+  --c-accent: #eab308;
+  --c-accent-tint: #f5ce4b;
+  --c-accent-dim: rgb(234 179 8 / 0.14);
+  --c-ok: #3f8f5f;
+  --c-ok-tint: #57b97d;
+  --c-ok-dim: rgb(87 185 125 / 0.14);
+  --c-bad-tint: #f08a80;
+  --c-bad-dim: rgb(220 38 38 / 0.12);
+  --c-shadow: 10 4 3;
+  --c-series: #de6a34;
+}
+
+[data-scheme='slate'] {
+  --c-bg: #0c0d10;
+  --c-sunken: #08090b;
+  --c-surface: #17191f;
+  --c-raised: #1f222a;
+  --c-ink-rgb: 241, 243, 247;
+  --c-ink: #f1f3f7;
+  --c-primary: #4f46e5;
+  --c-primary-pressed: #4338ca;
+  --c-primary-tint: #a5b4fc;
+  --c-primary-on: #f5f5ff;
+  --c-primary-dim: rgb(165 180 252 / 0.14);
+  --c-accent: #94a3b8;
+  --c-accent-tint: #cbd5e1;
+  --c-accent-dim: rgb(148 163 184 / 0.14);
+  --c-ok: #3f8f5f;
+  --c-ok-tint: #57b97d;
+  --c-ok-dim: rgb(87 185 125 / 0.14);
+  --c-bad-tint: #f08a80;
+  --c-bad-dim: rgb(220 38 38 / 0.12);
+  --c-shadow: 0 0 0;
+  --c-series: #7c84e8;
+}
+
+/* Alpha-derived roles are shared: every scheme states its ink as an rgb triple
+   and the washes fall out of it, so a new scheme needs five lines, not twenty. */
+:root {
+  --c-line: rgb(var(--c-ink-rgb) / 0.08);
+  --c-line-strong: rgb(var(--c-ink-rgb) / 0.16);
+  --c-ink-2: rgb(var(--c-ink-rgb) / 0.72);
+  --c-ink-dim: rgb(var(--c-ink-rgb) / 0.55);
+  --c-ink-muted: rgb(var(--c-ink-rgb) / 0.32);
+  /* Gridlines stay recessive — they orient the eye, they don't compete with
+     the data. Lighter than `--c-line`, which is a structural border. */
+  --c-grid: rgb(var(--c-ink-rgb) / 0.06);
+}
+
+@layer base {
+  * {
+    border-color: var(--c-line);
+  }
+
+  html {
+    background: var(--c-bg);
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04';
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+
+  ::selection {
+    background: var(--c-primary);
+    color: var(--c-primary-on);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--c-primary-tint);
+    outline-offset: 2px;
+  }
+
+  /* Telemetry is always mono and always tabular — a digit that changes width
+     makes a live readout jitter, which reads as instrument noise. */
+  .tnum {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 10px / 600 / 1.4 tracking, uppercase. The one micro-label style. */
+  .micro {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-ink-rgb) / 0.12);
+    border-radius: 99px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-ink-rgb) / 0.22);
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  /* Glass only ever goes over content, never over a flat background — over flat
+     it is just a tinted rectangle. */
+  .glass {
+    background: color-mix(in srgb, var(--c-surface) 72%, transparent);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--c-line);
+  }
+
+  /* The specular top rim is what sells a surface as glass rather than as a
+     translucent div. */
+  .rim::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--c-ink-rgb) / 0.18) 22%,
+      rgb(var(--c-ink-rgb) / 0.18) 78%,
+      transparent
+    );
+    pointer-events: none;
+  }
+
+  .elev-1 {
+    box-shadow: 0 1px 2px rgb(var(--c-shadow) / 0.4), 0 4px 14px -6px rgb(var(--c-shadow) / 0.5);
+  }
+  .elev-2 {
+    box-shadow: 0 2px 6px rgb(var(--c-shadow) / 0.45), 0 16px 40px -12px rgb(var(--c-shadow) / 0.6);
+  }
+  .elev-3 {
+    box-shadow: 0 4px 12px rgb(var(--c-shadow) / 0.5), 0 32px 70px -20px rgb(var(--c-shadow) / 0.7);
+  }
+
+  .no-select {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
