@@ -3,7 +3,12 @@ import type { Server as HttpServer } from 'http';
 
 const ESP32_PATH = '/ws/esp32';
 
-export type Role = 'rover' | 'camera' | 'sensor';
+/**
+ * `controller` is the only role that *sends* drive input rather than
+ * receiving it — a handheld board with a tilt sensor, steering the rover it
+ * is paired to.
+ */
+export type Role = 'rover' | 'camera' | 'sensor' | 'controller';
 
 interface Board {
   ws: WebSocket;
@@ -73,10 +78,31 @@ export function getBoards(roverMac: string) {
 type BoardListener = (info: { roverMac: string; mac: string; ip: string; role: Role }) => void;
 type FrameListener = (roverMac: string, frame: Buffer) => void;
 type TelemetryListener = (roverMac: string, readings: Record<string, number>, from: string) => void;
+type InputListener = (roverMac: string, x: number, y: number) => void;
+type CommandListener = (roverMac: string, command: string, value: number) => void;
 
 const boardListeners = new Set<BoardListener>();
 const frameListeners = new Set<FrameListener>();
 const telemetryListeners = new Set<TelemetryListener>();
+const inputListeners = new Set<InputListener>();
+const commandListeners = new Set<CommandListener>();
+
+/**
+ * A command raised by a handheld controller rather than by an app.
+ *
+ * Mirrored to the app so a headlight switched on the handset does not leave
+ * every other screen showing it as off.
+ */
+export function onControllerCommand(listener: CommandListener): () => void {
+  commandListeners.add(listener);
+  return () => { commandListeners.delete(listener); };
+}
+
+/** Drive input from a physical controller, mirrored to the app. */
+export function onControllerInput(listener: InputListener): () => void {
+  inputListeners.add(listener);
+  return () => { inputListeners.delete(listener); };
+}
 
 /**
  * Fires whenever a board registers or drops. Without it the app could only
@@ -104,8 +130,12 @@ export function onTelemetry(listener: TelemetryListener): () => void {
  * the commands it knows and logs the rest, so the drive board ignoring a
  * display update costs one line on its serial monitor and nothing else.
  */
-export function sendToESP32(roverMac: string, data: object): boolean {
-  const targets = boardsOf(roverMac).filter(open);
+export function sendToESP32(roverMac: string, data: object, exceptMac?: string): boolean {
+  const targets = boardsOf(roverMac)
+    .filter(open)
+    // A controller's own input must not be echoed back to it. Without this a
+    // board that both sends and receives would process its own messages.
+    .filter((b) => !exceptMac || b.mac !== exceptMac.toUpperCase());
   if (targets.length === 0) {
     console.warn(
       `[esp32] no boards registered for ${normMac(roverMac)} — known: ` +
@@ -172,7 +202,10 @@ export function startESP32WebSocket(server: HttpServer) {
       if (msg.type === 'register' && msg.macAddress) {
         const mac = normMac(msg.macAddress);
         const role: Role =
-          msg.role === 'camera' ? 'camera' : msg.role === 'sensor' ? 'sensor' : 'rover';
+          msg.role === 'camera' ? 'camera'
+          : msg.role === 'sensor' ? 'sensor'
+          : msg.role === 'controller' ? 'controller'
+          : 'rover';
         // A board that doesn't name a rover is one — the original single-board
         // setup, where the drive board's MAC *is* the rover's.
         const roverMac = msg.roverMac ? normMac(msg.roverMac) : mac;
@@ -193,6 +226,57 @@ export function startESP32WebSocket(server: HttpServer) {
         return;
       }
 
+      /*
+        Drive input arriving *from* a board — the handheld tilt controller.
+
+        Forwarded to the rest of the rover as a normal joystick message, so
+        the drive board cannot tell whether the phone or a physical controller
+        is steering, and needs no code for it. Clamped here rather than trusted:
+        a miscalibrated sensor sending 5.0 would otherwise ask for five times
+        full power.
+      */
+      if (msg.type === 'input' && self?.role === 'controller') {
+        const clamp = (v: unknown) =>
+          typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0;
+        const x = clamp(msg.x);
+        const y = clamp(msg.y);
+
+        sendToESP32(self.roverMac, { type: 'joystick', x, y }, self.mac);
+        // Mirrored to the app so the on-screen readout follows the physical
+        // controller instead of going stale while someone else drives.
+        inputListeners.forEach((l) => l(self!.roverMac, x, y));
+        return;
+      }
+
+      /*
+        A command raised *by* a board — the handheld controller's buttons.
+
+        Treated exactly like one from the app: fanned to every other board on
+        the rover and announced to the app, so a headlight switched from the
+        handset shows as on everywhere rather than only where it was pressed.
+
+        Only a controller may do this. A sensor hub or camera has no business
+        issuing drive commands, and accepting them from any board would make
+        one compromised board able to drive the rover.
+      */
+      if (msg.type === 'command' && self?.role === 'controller') {
+        const command = typeof msg.command === 'string' ? msg.command : '';
+        if (!command) return;
+        const value = typeof msg.value === 'number' ? msg.value : 1;
+
+        // `camera` is handled here rather than forwarded: streaming is the
+        // relay's decision, since it is the relay that knows whether anybody
+        // else is still watching.
+        if (command === 'camera') {
+          setCameraStreaming(self.roverMac, value !== 0);
+          return;
+        }
+
+        sendToESP32(self.roverMac, { type: 'command', command, value }, self.mac);
+        commandListeners.forEach((l) => l(self!.roverMac, command, value));
+        return;
+      }
+
       if (msg.type === 'telemetry' && self) {
         // Readings are an open key->number map on purpose: adding a sensor to
         // a board must not require a server change to carry its value.
@@ -202,6 +286,11 @@ export function startESP32WebSocket(server: HttpServer) {
         }
         if (Object.keys(readings).length === 0) return;
         telemetryListeners.forEach((l) => l(self!.roverMac, readings, self!.mac));
+
+        // Also handed back to the rover's other boards, so a handheld
+        // controller with a screen can show the same readings the app does.
+        // Excludes the sender, which would otherwise receive its own report.
+        sendToESP32(self.roverMac, { type: 'telemetry', readings }, self.mac);
       }
     });
 

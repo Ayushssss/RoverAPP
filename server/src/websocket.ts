@@ -2,6 +2,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import {
   sendToESP32, getESP32Ip, getCameraIp, hasCamera, getBoards,
   setCameraStreaming, onBoardChanged, onCameraFrame, onTelemetry,
+  onControllerInput, onControllerCommand,
 } from './esp32ws';
 
 interface DeviceMapping { userId: string; macAddress: string; socketId: string; }
@@ -28,6 +29,24 @@ export function setupWebSocket(io: SocketIOServer) {
   // Sensor readings, straight through to whoever is looking at that rover.
   onTelemetry((roverMac, readings, from) => {
     io.to(`device:${roverMac}`).emit('telemetry', { macAddress: roverMac, readings, from });
+  });
+
+  // Physical controller input, mirrored to the app. Throttled to ~5/s: the
+  // controller sends at 20Hz and the app only needs enough to keep a readout
+  // honest, not every frame.
+  let lastInputMirror = 0;
+  onControllerInput((roverMac, x, y) => {
+    const now = Date.now();
+    if (now - lastInputMirror < 200) return;
+    lastInputMirror = now;
+    io.to(`device:${roverMac}`).emit('controller-input', { macAddress: roverMac, x, y });
+  });
+
+  // Buttons on a handheld controller, mirrored to every app watching this
+  // rover — the same event shape the app emits itself, so the client needs no
+  // new handler to keep its headlight toggle honest.
+  onControllerCommand((roverMac, command, value) => {
+    io.to(`device:${roverMac}`).emit('command', { command, value });
   });
 
   // A board that connects *after* the app did still needs to announce itself,
