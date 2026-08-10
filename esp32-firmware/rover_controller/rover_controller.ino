@@ -42,6 +42,31 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
+#include <WiFiUdp.h>
+
+/* ── LAN direct link ─────────────────────────────────────────
+   A second way in, for when the controller is on the same network.
+
+   The relay path is handset -> hotspot -> carrier -> Singapore -> back, which
+   is 150-400ms on mobile data even with both devices on the same table. On the
+   LAN the same vector arrives in single-digit milliseconds, because it never
+   leaves the room.
+
+   UDP rather than TCP, deliberately. A drive vector is only interesting for the
+   40ms until the next one, so a retransmitted stale packet is worse than a lost
+   one — and TCP would hold later vectors behind it while it resends. Loss costs
+   nothing here: the controller repeats at 20Hz and the 1s failsafe catches a
+   real outage.
+
+   No authentication, and none is claimed. Anyone on the same network who knows
+   the format can drive the rover, exactly as anyone who knows the MAC can
+   through the relay. The MAC in each packet is a check against crosstalk
+   between two rovers, not a secret.
+*/
+WiFiUDP udp;
+const uint16_t LAN_PORT = 4210;
+/** Last LAN packet, so the console can show which path is carrying commands. */
+unsigned long lastLanAt = 0;
 
 /*
   ⚠ Keep this struct above EVERY function definition in this file.

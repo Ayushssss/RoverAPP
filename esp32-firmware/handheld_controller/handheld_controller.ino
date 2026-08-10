@@ -57,6 +57,7 @@
               GPIO 32  LEFT     hold to turn left
               GPIO 33  RIGHT    hold to turn right
               GPIO 26  CENTRE   hold = drive by tilt, tap = next page
+                                 held at RESET = forget the saved network
               GPIO 21  HEADLIGHT   6-pin self-locking switch
 
               Every pad button is a dead-man: the rover only moves while one
@@ -77,11 +78,19 @@
 
 /*
   ── WiFi ──
-  No credentials here. They are entered once on a phone and kept in NVS —
-  see wifi_provision.h. Hold CENTRE while the board resets to clear them and
-  return to the setup portal.
+
+  No credentials in this file. On boot the handset rejoins whatever it used
+  last; if that network is gone it lands on the WiFi page with a scan already
+  running, and you pick one and type the password on screen.
+
+  Hold CENTRE through reset to forget the stored network and go straight to
+  that list.
+
+  wifi_provision.h still carries the phone-based captive portal. Nothing calls
+  it now — the on-screen keyboard covers the same job without a second device —
+  but it is left in place because a field handset with a broken screen would
+  need it.
 */
-const char* SETUP_AP_NAME = "AgriVerse-Setup";
 
 // ── Server ──
 const char* WS_HOST = "roverapp-3b7v.onrender.com";
@@ -266,6 +275,8 @@ WebSocketsClient ws;
 
 bool linked = false;
 bool mpuReady = false;
+/** No usable network yet: the WiFi page is the only page until there is one. */
+bool needsWifi = false;
 bool driving = false;
 
 /** Which control is steering right now. */
@@ -847,51 +858,41 @@ void paintLink(bool full) {
   tft.setTextPadding(0);
 }
 
-/**
- * The setup screen, shown while the provisioning portal is up.
- *
- * This is where the display earns its place: without it, a device in setup
- * mode is a board with no output that has silently created an access point,
- * and the only way to discover the network name is to go looking for it. Here
- * it simply says what to join and where to go.
- */
-void paintSetup() {
-  tft.fillScreen(C_BG);
-
-  tft.fillRect(0, 0, SCREEN_W, HEADER_H, C_PANEL);
-  tft.setTextSize(1);
-  tft.setTextColor(C_ACCENT, C_PANEL);
-  tft.drawString("WIFI SETUP", 4, 4);
-
-  tft.setTextColor(C_DIM, C_BG);
-  tft.drawString("1. Join this network:", 6, 22);
-
-  tft.setTextSize(2);
-  tft.setTextColor(C_INK, C_BG);
-  tft.drawString(wifiprov::portalName(), 6, 34);
-
-  tft.setTextSize(1);
-  tft.setTextColor(C_DIM, C_BG);
-  tft.drawString("2. The setup page opens", 6, 58);
-  tft.drawString("   by itself. If not:", 6, 68);
-
-  tft.setTextColor(C_PRIMARY, C_BG);
-  tft.drawString(wifiprov::portalUrl(), 6, 80);
-
-  tft.setTextColor(C_DIM, C_BG);
-  tft.drawString("3. Pick a network, save.", 6, 96);
-
-  drawFooter("waiting for credentials");
-}
-
 /** Kick off a scan if one is not already running. Returns immediately. */
 void startScan() {
   if (scanning) return;
-  scanning = true;
-  lastScanAt = millis();
+
+  /*
+    Stop any connection attempt first.
+
+    A failed join does not end when it times out — the station keeps retrying
+    in the background, and a scan started while the radio is mid-attempt
+    returns WIFI_SCAN_FAILED rather than a list. The symptom is "no networks
+    found" on a handset surrounded by networks, which points at the antenna
+    when the real cause is a busy radio.
+
+    Only when disconnected: scanning while associated is fine, and dropping a
+    working link to list networks would be its own bug.
+  */
+  WiFi.mode(WIFI_STA);
+  if (!WiFi.isConnected()) {
+    WiFi.disconnect(false, false);   // stop retrying; keep the radio and creds
+    delay(100);                      // the driver needs a moment to settle
+  }
+
   // `true` is the async flag — this returns at once and the result is
   // collected by pollScan() on a later pass.
-  WiFi.scanNetworks(true);
+  // Stamped before the attempt, so a scan that refuses to start still backs
+  // off to the retry interval instead of being hammered every loop.
+  lastScanAt = millis();
+
+  const int started = WiFi.scanNetworks(true);
+  if (started == WIFI_SCAN_FAILED) {
+    Serial.println("[scan] could not start - retrying shortly");
+    return;                          // leave `scanning` false for the timer
+  }
+
+  scanning = true;
 }
 
 /** Collect a finished scan. Returns true when new results arrived. */
@@ -903,6 +904,14 @@ bool pollScan() {
 
   scanning = false;
   seenCount = 0;
+
+  // Distinguished on purpose: a scan that failed and a scan that genuinely
+  // found nothing look identical on screen but have nothing else in common.
+  if (found < 0) {
+    Serial.printf("[scan] FAILED (code %d)\n", found);
+  } else {
+    Serial.printf("[scan] %d network%s\n", found, found == 1 ? "" : "s");
+  }
 
   if (found > 0) {
     // Results come back sorted strongest-first, so taking the first few is
@@ -929,7 +938,9 @@ bool pollScan() {
 void paintWifi(bool full) {
   if (full) {
     tft.fillRect(0, HEADER_H, SCREEN_W, SCREEN_H - HEADER_H - FOOTER_H, C_BG);
-    drawFooter("FRONT/BACK pick  RIGHT join");
+    // On the boot path this page is not a choice, so it says what is expected.
+    drawFooter(needsWifi ? "pick a network to continue"
+                         : "FRONT/BACK pick  RIGHT join");
   }
 
   tft.setTextSize(1);
@@ -937,8 +948,11 @@ void paintWifi(bool full) {
   if (seenCount == 0) {
     tft.setTextColor(C_DIM, C_BG);
     tft.setTextPadding(150);
-    tft.drawString(scanning ? "scanning..." : "no networks found", 6, 40);
+    tft.drawString(scanning ? "scanning..." : "no networks - retrying", 6, 40);
     tft.setTextPadding(0);
+    // "Retrying" rather than "none found": the list refreshes on its own every
+    // few seconds, and saying so stops it reading as a dead end.
+    tft.drawString("", 6, 54);
     return;
   }
 
@@ -1176,6 +1190,10 @@ void paint(bool full) {
 /* ── Input ────────────────────────────────────────────────── */
 
 void changePage(int delta) {
+  // Leaving the WiFi page before joining something would strand the user on a
+  // screen with nothing on it that works.
+  if (needsWifi) return;
+
   // Releasing the pad mid-drive would otherwise leave the rover running while
   // you browse another page.
   if (driving) {
@@ -1409,16 +1427,38 @@ void setup() {
   if (forceSetup) {
     wifiprov::forget();
     tft.setTextColor(C_ACCENT, C_BG);
-    tft.drawString("setup forced", 6, 48);
+    tft.drawString("network cleared", 6, 48);
     tft.setTextColor(C_DIM, C_BG);
-  } else {
-    tft.drawString("joining wifi...", 6, 48);
   }
 
-  if (!wifiprov::begin(SETUP_AP_NAME, forceSetup)) {
-    // The portal is up. Nothing else can proceed until a network is chosen, so
-    // this stays on screen until loopPortal() reports success.
-    paintSetup();
+  /*
+    ── Boot: reconnect, or offer the list ─────────────────────
+
+    Try the stored network first. That is the common case by a wide margin —
+    the handset is switched on in the same place it was last used — and it
+    should cost nothing but the join.
+
+    If that fails, land on the WiFi page with a scan already running. No
+    access point, no phone, no captive portal: pick a network with the pad and
+    type the password on screen. Needing a second device to get the first one
+    onto a network is exactly the thing that makes a handheld useless in a
+    field.
+  */
+  String storedSsid, storedPass;
+  const bool hasStored = !forceSetup && wifiprov::load(storedSsid, storedPass);
+
+  if (hasStored) {
+    tft.setTextPadding(SCREEN_W - 12);
+    tft.drawString("joining " + storedSsid.substring(0, 12) + "...", 6, 48);
+    tft.setTextPadding(0);
+  }
+
+  if (!hasStored || !wifiprov::join(storedSsid, storedPass)) {
+    Serial.println(hasStored ? "[wifi] stored network unreachable — offering the list"
+                             : "[wifi] no stored network — offering the list");
+    needsWifi = true;
+    page = PAGE_WIFI;
+    startScan();
   }
 
   ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
@@ -1430,22 +1470,22 @@ void setup() {
 
 void loop() {
   /*
-    While the portal is up, nothing else runs.
+    Until there is a network, the WiFi page is the only page.
 
-    No relay, no driving, no pad — there is no network to reach the rover
-    over, and letting the pad appear to work would be worse than it plainly
-    not working. Returning early also keeps the web server responsive, which
-    matters when a phone is waiting on it.
+    Nothing else can work without it, and a pad that appears to steer while
+    the vectors go nowhere is worse than one that plainly does not. Page
+    cycling is suppressed too, so the only way out is to join something.
   */
-  if (wifiprov::portalActive()) {
-    if (wifiprov::loopPortal()) {
-      // Joined. Reconnect the relay to the network we now have and carry on.
-      Serial.println("[wifi] provisioned — starting normally");
-      ws.disconnect();
-      ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+  if (needsWifi) {
+    if (WiFi.isConnected()) {
+      needsWifi = false;
+      page = PAGE_DRIVE;
+      pageDirty = true;
+      Serial.println("[wifi] connected — carrying on");
+    } else if (page != PAGE_WIFI) {
+      page = PAGE_WIFI;
       pageDirty = true;
     }
-    return;
   }
 
   ws.loop();
@@ -1487,7 +1527,11 @@ void loop() {
   */
   if (page == PAGE_WIFI) {
     if (pollScan()) pageDirty = true;
-    if (!scanning && now - lastScanAt >= RESCAN_MS) startScan();
+    // Faster while the list is empty. Fifteen seconds is fine for refreshing a
+    // list you can already read, but it is a long time to stare at nothing when
+    // the handset cannot continue until you pick something.
+    const unsigned long wait = seenCount ? RESCAN_MS : 4000;
+    if (!scanning && now - lastScanAt >= wait) startScan();
   }
 
   // Repaint on a timer rather than every loop. The panel is on SPI and a full
