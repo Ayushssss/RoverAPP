@@ -47,10 +47,12 @@
 /* ── LAN direct link ─────────────────────────────────────────
    A second way in, for when the controller is on the same network.
 
-   The relay path is handset -> hotspot -> carrier -> Singapore -> back, which
-   is 150-400ms on mobile data even with both devices on the same table. On the
-   LAN the same vector arrives in single-digit milliseconds, because it never
-   leaves the room.
+   The relay path is handset -> hotspot -> carrier -> Mumbai -> back. Moving
+   that host from Render to our own EC2 instance took the server's share from a
+   175ms median with 534ms spikes down to a steady 36ms, but the carrier leg is
+   untouched by any of that and still costs 30-100ms each way. On the LAN the
+   same vector arrives in single-digit milliseconds, because it never leaves
+   the room.
 
    UDP rather than TCP, deliberately. A drive vector is only interesting for the
    40ms until the next one, so a retransmitted stale packet is worse than a lost
@@ -90,7 +92,7 @@ const char* WIFI_SSID = "ANANYA";
 const char* WIFI_PASS = "satish.m";
 
 // ── Server ──
-const char* WS_HOST = "roverapp-3b7v.onrender.com";
+const char* WS_HOST = "roverapp.duckdns.org";
 const int   WS_PORT = 443;
 const char* WS_PATH = "/ws/esp32";
 

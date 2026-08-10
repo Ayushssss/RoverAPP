@@ -93,7 +93,7 @@
 */
 
 // ── Server ──
-const char* WS_HOST = "roverapp-3b7v.onrender.com";
+const char* WS_HOST = "roverapp.duckdns.org";
 const int   WS_PORT = 443;
 const char* WS_PATH = "/ws/esp32";
 

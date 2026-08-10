@@ -24,14 +24,30 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Latest app version — increment on each build
-// Latest app version — increment on each build
 const APP_VERSION = {
   latest: '1.0.1',
   minRequired: '1.0.1',
-  apkUrl: 'https://roverapp.onrender.com/downloads/AgriverseROVER-v1.0.1.apk',
 };
-app.get('/api/version', (_req, res) => {
-  res.json(APP_VERSION);
+
+/** The APK lives next to the relay, under the /downloads static mount below. */
+const APK_FILE = `AgriverseROVER-v${APP_VERSION.latest}.apk`;
+
+/*
+  The download URL is built from the request rather than hardcoded.
+
+  It used to name the Render host outright, which meant moving the relay left
+  every installed app fetching its update from a server we no longer run — and
+  the failure is invisible from here, because the relay answers /api/version
+  perfectly well while handing out a dead link.
+
+  Whatever host reached this route can serve the file, so ask the request.
+*/
+app.get('/api/version', (req, res) => {
+  const proto = req.get('x-forwarded-proto') ?? req.protocol;
+  res.json({
+    ...APP_VERSION,
+    apkUrl: `${proto}://${req.get('host')}/downloads/${APK_FILE}`,
+  });
 });
 
 

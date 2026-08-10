@@ -1,16 +1,23 @@
 const DEV_API_URL = 'http://192.168.0.102:3000';
 /*
-  Singapore, not Oregon.
+  Mumbai, on our own EC2 box.
 
-  The original service sat in Render's US-West region, which put roughly
-  300ms of Pacific crossing between a phone and a rover standing in the same
-  room. Measured from here: 22,400ms cold / ~240ms warm to Oregon, against
-  209ms cold / ~105ms warm to Singapore.
+  Every command crosses this host, so its distance is added to every one of
+  them. Two moves, each measured from here:
 
-  The old host still exists and still runs the same code — switch back by
-  changing this one line if the new service ever misbehaves.
+    Render, US-West    ~240ms warm, 22,400ms cold
+    Render, Singapore  ~105ms warm, 209ms cold
+    EC2, ap-south-1     36ms median, 33-44ms spread
+
+  The last step is bigger than the geography alone accounts for. Render's free
+  tier throttles, which showed up as occasional 534ms spikes on an otherwise
+  175ms median — and a spike mid-turn is what actually makes a rover feel
+  broken. Our own instance has no such behaviour, so the tail collapsed along
+  with the median.
+
+  Switching back is one line, and the Render service still runs the same code.
 */
-const PROD_API_URL = 'https://roverapp-3b7v.onrender.com';
+const PROD_API_URL = 'https://roverapp.duckdns.org';
 
 // Set to true when deploying to production
 export const IS_PRODUCTION = true;

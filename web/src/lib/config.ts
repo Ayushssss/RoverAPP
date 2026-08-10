@@ -1,14 +1,15 @@
 /**
  * Where the relay lives.
  *
- * Same Singapore host the mobile app points at (mobile/src/config.ts) — the
+ * Same Mumbai host the mobile app points at (mobile/src/config.ts) — the
  * console and the phone talk to one relay, so a rover driven from a laptop and
- * a rover driven from a phone are the same rover in the same room.
+ * a rover driven from a phone are the same rover in the same room. That file
+ * carries the latency numbers behind the choice.
  *
  * Overridable at runtime from Settings, because a rover on the bench is often
  * reachable on the LAN long before it is reachable through a cloud host.
  */
-export const DEFAULT_RELAY = 'https://roverapp-3b7v.onrender.com';
+export const DEFAULT_RELAY = 'https://roverapp.duckdns.org';
 
 /** The command tokens the drive firmware answers to (rover_controller.ino). */
 export const COMMANDS = {
