@@ -1,0 +1,24 @@
+; Runs the health probe every two minutes.
+;
+; This is the timer to enable — not roverapp-health.service, which it triggers:
+;
+;   sudo systemctl enable --now roverapp-health.timer
+;   systemctl list-timers roverapp-health.timer
+
+[Unit]
+Description=Probe the AgriVerse relay every 2 minutes
+
+[Timer]
+; First probe a minute after boot, so the relay has time to come up on its own
+; and the watchdog does not restart a service that is merely still starting.
+OnBootSec=1min
+OnUnitActiveSec=2min
+
+; With three tries five seconds apart, a real outage is noticed within about
+; two and a half minutes. Probing harder would not help — a rover mid-drive has
+; already stopped by then, and the failsafe in the firmware handles that in one
+; second regardless of what the server is doing.
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -11,8 +11,15 @@ set -euo pipefail
 
 DOMAIN="${1:-}"
 MONGO_URI="${2:-}"
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/server"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$HERE/.." && pwd)/server"
 SERVICE=roverapp
+
+# The relay binds port 3000, and only ports below 1024 need privilege, so it
+# has no reason to run as root. Use whoever invoked sudo — they own the working
+# tree, which keeps `git pull` working. A dedicated service account would take
+# ownership of the repo and break exactly that.
+RUN_USER="${SUDO_USER:-ubuntu}"
 # The Node process listens only on loopback; Caddy is the only thing exposed.
 # Without this, the port is reachable directly and bypasses TLS entirely.
 PORT=3000
@@ -78,7 +85,6 @@ NODE_ENV=production
 PORT=$PORT
 MONGODB_URI=$MONGO_URI
 EOF
-  chmod 600 "$ENV_FILE"
   echo "==> wrote $ENV_FILE"
 elif [ ! -f "$ENV_FILE" ]; then
   die "no MONGODB_URI given and $ENV_FILE does not exist"
@@ -86,35 +92,38 @@ else
   echo "==> keeping existing $ENV_FILE"
 fi
 
+# Readable by the service account and nobody else. It was root-only, which was
+# correct while the service ran as root; now that it does not, root-only would
+# mean the relay starts and immediately fails to read its own database URI.
+chown "$RUN_USER" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
 # ── service ─────────────────────────────────────────────────
 
-cat > /etc/systemd/system/$SERVICE.service <<EOF
-[Unit]
-Description=AgriVerse Rover relay
-After=network-online.target
-Wants=network-online.target
+# The unit lives in deploy/roverapp.service rather than in a heredoc here, so
+# it is reviewable on its own and a change to it shows up as a diff to a unit
+# file instead of a diff to a shell script that happens to print one.
+echo "==> installing systemd units (running as $RUN_USER)"
+sed -e "s|__APP_DIR__|$APP_DIR|g" \
+    -e "s|__RUN_USER__|$RUN_USER|g" \
+    "$HERE/roverapp.service" > /etc/systemd/system/$SERVICE.service
 
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-EnvironmentFile=$ENV_FILE
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-# A relay that dies under load should come back fast; five seconds is long
-# enough to avoid a hot loop and short enough that nobody reaches for the
-# console first.
-RestartSec=5
-User=root
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# The watchdog: systemd restarts the relay when the process exits, and this
+# catches the other case — still running, no longer answering.
+install -m 755 "$HERE/roverapp-health.sh" /usr/local/bin/roverapp-health
+install -m 644 "$HERE/roverapp-health.service" /etc/systemd/system/
+install -m 644 "$HERE/roverapp-health.timer"   /etc/systemd/system/
 
 systemctl daemon-reload
 systemctl enable $SERVICE
 systemctl restart $SERVICE
+systemctl enable --now $SERVICE-health.timer
+
+# `enable` is what survives a reboot; `restart` only covers right now. Assert it
+# rather than assume it, because the difference is invisible until the instance
+# reboots and the relay silently does not come back.
+systemctl is-enabled --quiet $SERVICE \
+  || die "$SERVICE did not enable - it would not survive a reboot"
 
 # ── reverse proxy ───────────────────────────────────────────
 
@@ -134,8 +143,9 @@ systemctl reload caddy || systemctl restart caddy
 
 sleep 2
 echo
-echo "==> service:"
-systemctl is-active $SERVICE || true
+echo "==> service:      $(systemctl is-active $SERVICE) / $(systemctl is-enabled $SERVICE)"
+echo "==> watchdog:     $(systemctl is-active $SERVICE-health.timer)"
+echo "==> running as:   $(systemctl show -p User --value $SERVICE)"
 echo "==> health:"
 curl -fsS "http://127.0.0.1:$PORT/api/health" || echo "  (not answering yet - check: journalctl -u $SERVICE -n 50)"
 echo

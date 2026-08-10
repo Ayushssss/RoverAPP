@@ -70,12 +70,57 @@ of them:
 Re-flash the boards and redeploy the web app afterwards. Nothing else changes:
 the wire protocol, the ports and the paths are all identical.
 
+## Running it
+
+The relay runs under systemd, not under your shell. **Closing PuTTY does not
+stop it**, and neither does rebooting — `systemctl enable` is what brings it
+back on boot, and `setup.sh` asserts that rather than assuming it.
+
+Never start it with `npm start` in a terminal. That process belongs to your SSH
+session and dies with it, and worse, it holds port 3000 so the real service
+cannot start until you find and kill it.
+
+```bash
+sudo systemctl status roverapp     # is it running?
+sudo systemctl restart roverapp    # bounce it
+sudo journalctl -u roverapp -f     # live logs (Ctrl-C is safe — logs only)
+sudo journalctl -u roverapp -b     # everything since boot
+```
+
+Two mechanisms keep it up, covering different failures:
+
+| Failure | Caught by |
+|---|---|
+| Process crashes or exits | `Restart=always`, retried every 5 s |
+| Crashes instantly and repeatedly | `StartLimitIntervalSec=0` — see below |
+| Alive but not answering | `roverapp-health.timer`, probing every 2 min |
+| Instance reboots | `systemctl enable` |
+| Memory leak | `MemoryMax=400M`, then restarted |
+
+The second row is the one that bites. **`Restart=always` does not mean always**
+— systemd's default limit is 5 starts in 10 seconds, and a service that trips
+it is marked `failed` and left down permanently. Anything that kills the relay
+immediately at startup hits that in well under a second. `StartLimitIntervalSec=0`
+in [roverapp.service](roverapp.service) disables the limit so it retries forever.
+
+The watchdog covers what systemd structurally cannot see: a process that is
+still alive and no longer working — a blocked event loop, exhausted file
+descriptors. systemd sees a healthy PID and does nothing at all.
+
+```bash
+systemctl list-timers roverapp-health.timer   # when it last ran, when it runs next
+journalctl -t roverapp-health                 # times it has intervened
+```
+
+`Requisite=roverapp.service` means the watchdog will not resurrect a relay you
+stopped deliberately, so maintenance still works.
+
 ## Checking it worked
 
 ```bash
 curl https://relay.example.com/api/health          # {"status":"ok"}
-sudo systemctl status roverapp                     # active (running)
-sudo journalctl -u roverapp -f                     # live logs
+systemctl is-enabled roverapp                      # enabled  <- survives reboot
+systemctl show -p User --value roverapp            # ubuntu   <- not root
 ```
 
 For the WebSocket path specifically, the useful test is the one that caught the

@@ -1,0 +1,18 @@
+; One health probe. Fired by roverapp-health.timer — not enabled directly.
+;
+; Type=oneshot, so systemd treats "the script finished" as success rather than
+; "the service stopped unexpectedly". A oneshot that exits 0 is not a fault.
+
+[Unit]
+Description=AgriVerse Rover relay health probe
+; Nothing to probe if the relay was stopped on purpose. Without this the timer
+; would restart a service somebody deliberately took down for maintenance.
+Requisite=roverapp.service
+After=roverapp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/roverapp-health
+; It restarts roverapp, which needs privilege. The probe itself does nothing
+; else and is four lines of curl.
+User=root
