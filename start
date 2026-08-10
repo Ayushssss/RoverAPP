@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Start the relay.
+#
+#   ./start
+#
+# ── This does not run the server in your terminal ─────────────
+#
+# It hands it to systemd and returns. That is the whole point: a server started
+# from your shell belongs to your SSH session and dies the moment PuTTY closes,
+# and it takes port 3000 with it while it lives, so the real service cannot
+# start until somebody finds and kills the stray process.
+#
+# Started this way it survives logout, survives a reboot, restarts itself if it
+# crashes, and gets restarted by the watchdog if it hangs without crashing.
+#
+#   ./start          start it (and rebuild first if the code changed)
+#   ./start --logs   start it, then follow the log until you press Ctrl-C
+#
+# Ctrl-C at that point stops the log, not the relay.
+
+set -euo pipefail
+
+SERVICE=roverapp
+PORT=3000
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$ROOT/server"
+FOLLOW=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --logs|-l) FOLLOW=1 ;;
+    # Print the header block above, stopping at the first line that is not a
+    # comment. A hardcoded line range goes stale the moment the header is
+    # edited, and it goes stale silently by leaking code into the help text.
+    -h|--help) awk 'NR>1 { if (!/^#/) exit; sub(/^# ?/,""); print }' "$0"; exit 0 ;;
+    *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# systemctl needs privilege, so re-run under sudo rather than failing halfway
+# through with a permission error that looks like a broken script.
+if [ "$EUID" -ne 0 ]; then
+  exec sudo -- "$0" "$@"
+fi
+
+# ── Is it installed at all? ─────────────────────────────────
+
+# The unit is written by setup.sh, which also needs the domain and the database
+# URI. Guessing either of those here would produce a relay that starts and then
+# fails in a way that has nothing to do with starting it.
+if [ ! -f "/etc/systemd/system/$SERVICE.service" ]; then
+  echo "The $SERVICE service is not installed yet." >&2
+  echo >&2
+  echo "  cd $ROOT/deploy" >&2
+  echo "  sudo ./setup.sh <your-domain> \"<mongodb-uri>\"" >&2
+  echo >&2
+  echo "That installs Node, Caddy and this service. Then ./start works." >&2
+  exit 1
+fi
+
+# ── Rebuild if the source moved ahead of the build ──────────
+
+# `git pull && ./start` should run the code you just pulled. Without this it
+# would restart the previous build and look like the pull did nothing — the
+# most confusing possible outcome, because everything reports healthy.
+NEWEST_SRC=$(find "$APP_DIR/src" -type f -newer "$APP_DIR/dist/index.js" -print -quit 2>/dev/null || true)
+if [ ! -f "$APP_DIR/dist/index.js" ] || [ -n "$NEWEST_SRC" ]; then
+  echo "==> source is newer than the build - rebuilding"
+  # As the repo's owner, not root: npm writes to node_modules and its cache,
+  # and doing that as root leaves root-owned files behind that break the next
+  # ordinary `npm install` with EACCES.
+  OWNER=$(stat -c '%U' "$APP_DIR")
+  sudo -u "$OWNER" --preserve-env=PATH sh -c "cd '$APP_DIR' && npm install --silent && npm run build"
+fi
+
+# ── Start ───────────────────────────────────────────────────
+
+echo "==> starting $SERVICE"
+systemctl start "$SERVICE"
+
+# Enable is a separate thing from start, and it is the one that matters after a
+# reboot. Cheap to assert every time; invisible until the day it is missing.
+systemctl is-enabled --quiet "$SERVICE" || systemctl enable --quiet "$SERVICE"
+systemctl is-enabled --quiet "$SERVICE-health.timer" 2>/dev/null \
+  || systemctl enable --now --quiet "$SERVICE-health.timer" 2>/dev/null || true
+
+# ── Wait for it to actually answer ──────────────────────────
+
+# `systemctl start` returns as soon as the process is spawned, which is before
+# it is listening. Reporting success there would mean ./start printed OK for a
+# relay that went on to die two seconds later during startup.
+printf '==> waiting for health'
+for _ in $(seq 1 20); do
+  if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+    echo
+    echo
+    echo "    relay      $(systemctl is-active $SERVICE) / $(systemctl is-enabled $SERVICE)"
+    echo "    watchdog   $(systemctl is-active $SERVICE-health.timer 2>/dev/null || echo 'not installed')"
+    echo "    user       $(systemctl show -p User --value $SERVICE)"
+    echo "    health     $(curl -fsS --max-time 2 http://127.0.0.1:$PORT/api/health)"
+    echo
+    echo "Running under systemd. Closing this session will not stop it."
+    echo "  logs:     sudo journalctl -u $SERVICE -f"
+    echo "  stop:     sudo systemctl stop $SERVICE"
+    [ "$FOLLOW" -eq 1 ] && { echo; exec journalctl -u "$SERVICE" -f; }
+    exit 0
+  fi
+  printf '.'
+  sleep 1
+done
+
+# ── It did not come up ──────────────────────────────────────
+
+echo
+echo
+echo "The service did not answer on port $PORT within 20s." >&2
+echo "State: $(systemctl is-active $SERVICE)" >&2
+echo >&2
+echo "Last 20 log lines:" >&2
+journalctl -u "$SERVICE" -n 20 --no-pager >&2
+exit 1

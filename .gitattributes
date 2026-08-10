@@ -11,6 +11,7 @@
 # in the repository for everything that Linux executes or parses.
 
 *.sh            text eol=lf
+start           text eol=lf
 *.service       text eol=lf
 *.timer         text eol=lf
 Caddyfile       text eol=lf
