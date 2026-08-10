@@ -26,6 +26,21 @@ die() { echo "error: $*" >&2; exit 1; }
 echo "==> relay: $DOMAIN"
 echo "==> app:   $APP_DIR"
 
+# ── swap ────────────────────────────────────────────────────
+
+# On a 512MB instance the OOM killer takes out `npm install` partway through,
+# and the failure it leaves behind looks like a corrupt package rather than a
+# memory problem. Cheap insurance, and harmless on a larger box.
+MEM_MB=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$MEM_MB" -lt 900 ] && [ ! -f /swapfile ]; then
+  echo "==> ${MEM_MB}MB RAM — adding 2G swap so the build survives"
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 # ── packages ────────────────────────────────────────────────
 
 if ! command -v node >/dev/null; then
