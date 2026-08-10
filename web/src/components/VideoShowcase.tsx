@@ -113,10 +113,22 @@ export default function VideoShowcase({
           aria-label="Concept animation of an automated crop field: a domed greenhouse, planted rows, and an aerial drone passing overhead"
         />
 
+        {/*
+          A missing clip falls back to its own poster frame rather than an
+          error box.
+
+          The video is decoration on a landing page, and a deployment that
+          omits it — the 3MB file is easy to leave out of a static host — should
+          look like a still photograph, not like something broken. The poster is
+          a real frame from the clip, so the panel still shows what it is meant
+          to show.
+        */}
         {failed && (
-          <div className="absolute inset-0 flex items-center justify-center bg-sunken px-6 text-center">
-            <p className="text-sm text-ink-dim">That clip could not be loaded.</p>
-          </div>
+          <img
+            src={poster}
+            alt="Concept animation still: a domed greenhouse over planted crop rows"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         )}
 
         {/* A hairline scrim under the chrome only — a full overlay would wash
