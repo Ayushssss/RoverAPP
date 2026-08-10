@@ -58,19 +58,53 @@ EC2 → Launch instance.
 
 ### Security group
 
-Create a new one with exactly these inbound rules:
+A security group is a firewall. It has two halves, and only one of them needs
+touching:
 
-| Type | Port | Source | Why |
-|---|---|---|---|
-| SSH | 22 | **My IP** | Never `0.0.0.0/0` — SSH on an open port is scanned within minutes. |
-| HTTP | 80 | `0.0.0.0/0` | **Required.** Let's Encrypt validates over HTTP before it will issue. |
-| HTTPS | 443 | `0.0.0.0/0` | The relay itself. |
+- **Inbound** — traffic arriving from the world. This is what you configure.
+- **Outbound** — traffic the server sends out. AWS allows everything by
+  default, which is what you want: the relay has to reach MongoDB and Let's
+  Encrypt. **Leave it alone.**
 
-**Do not open 3000.** The Node process binds to loopback and Caddy is the only
-thing exposed; opening it would let clients bypass TLS entirely.
+#### The easy way — the launch wizard
+
+Under **Network settings**, with *Create security group* selected, there are
+three checkboxes. Set them exactly like this and you never touch a rules table:
+
+| Checkbox | Setting |
+|---|---|
+| Allow SSH traffic from | tick, and change the dropdown to **My IP** |
+| Allow HTTPS traffic from the internet | tick |
+| Allow HTTP traffic from the internet | tick |
+
+The SSH dropdown defaults to **Anywhere**. Change it. Port 22 open to the world
+is found by scanners within minutes.
+
+#### The manual way
+
+EC2 → Security Groups → yours → **Inbound rules** → *Edit inbound rules* →
+*Add rule*. Choosing **Type** fills in Protocol and Port for you, so **Source**
+is the only other field:
+
+| Type | Protocol | Port | Source | Why |
+|---|---|---|---|---|
+| SSH | TCP | 22 | **My IP** | Never `0.0.0.0/0`. |
+| HTTP | TCP | 80 | Anywhere-IPv4 | **Required.** Let's Encrypt validates over plain HTTP before it will issue. |
+| HTTPS | TCP | 443 | Anywhere-IPv4 | The relay itself. |
+
+Save. Rules apply immediately, with no restart.
+
+#### Checking it
+
+Inbound should show exactly three rows — 22, 80, 443. Outbound should show one:
+*All traffic → 0.0.0.0/0*, the default.
+
+**Do not add a rule for 3000.** Node binds to loopback and Caddy is the only
+thing facing the internet, so the rule would do nothing — and if it did work, it
+would let clients skip TLS entirely.
 
 Forgetting port 80 is the most common reason Caddy sits failing to get a
-certificate, and the error it gives is not obvious.
+certificate, and the error it prints does not mention port 80.
 
 ---
 
