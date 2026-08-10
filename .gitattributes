@@ -1,0 +1,20 @@
+# Line endings.
+#
+# The repo is edited on Windows and deployed to Linux, and git's default is to
+# store whatever it was handed. A shell script committed with CRLF fails on the
+# instance in a way that reads as nonsense:
+#
+#     ./setup.sh: /usr/bin/env: 'bash\r': No such file or directory
+#
+# The interpreter name really does include the carriage return, so nothing on
+# the box can run it and the error names a file that appears to exist. Force LF
+# in the repository for everything that Linux executes or parses.
+
+*.sh            text eol=lf
+*.service       text eol=lf
+*.timer         text eol=lf
+Caddyfile       text eol=lf
+
+# Firmware is read by the Arduino IDE on Windows and by nothing on Linux, so it
+# is left to the platform default.
+*.ino           text
