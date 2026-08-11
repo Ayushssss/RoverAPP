@@ -88,7 +88,7 @@ struct Motor {
 };
 
 // ── WiFi ──
-const char* WIFI_SSID = "ANANYA";
+const char* WIFI_SSID = "Ananya";
 const char* WIFI_PASS = "satish.m";
 
 // ── Server ──

@@ -38,4 +38,11 @@ export const SENSOR_META: Record<
   soil: { label: 'Soil', unit: '%', digits: 0, icon: 'sprout' },
   lux: { label: 'Light', unit: 'lx', digits: 0, icon: 'sun' },
   pressureHpa: { label: 'Pressure', unit: 'hPa', digits: 0, icon: 'gauge' },
+
+  // Night rover (night_rover.ino): forward range finder, obstacle flag and
+  // headlight level. `obstacle` is 0 or 1 — readings are a key→number map, so
+  // it arrives as a number rather than a boolean.
+  distanceCm: { label: 'Range', unit: 'cm', digits: 0, icon: 'ruler' },
+  obstacle: { label: 'Obstacle', unit: '', digits: 0, icon: 'octagon-alert' },
+  headlight: { label: 'Headlight', unit: '', digits: 0, icon: 'lightbulb' },
 };

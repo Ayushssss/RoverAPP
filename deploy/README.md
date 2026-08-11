@@ -59,13 +59,14 @@ after a code change.
 
 ## Then repoint the clients
 
-The host appears in eight places. `./repoint.sh relay.example.com` rewrites all
-of them:
+`./repoint.sh relay.example.com` rewrites every one of them:
 
-- five ESP32 sketches (`WS_HOST`)
+- every ESP32 sketch declaring `WS_HOST` — found by searching, not from a list,
+  so a new rover is picked up without editing the script
 - `mobile/src/config.ts`
 - `web/src/lib/config.ts`
-- this README's example
+
+It prints what it found and the old value of each before changing anything.
 
 Re-flash the boards and redeploy the web app afterwards. Nothing else changes:
 the wire protocol, the ports and the paths are all identical.

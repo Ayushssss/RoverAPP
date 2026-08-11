@@ -210,10 +210,13 @@ cd RoverAPP/deploy
 ./repoint.sh relay.yourdomain.com
 ```
 
-Rewrites the host in all eight places — six sketches, `mobile/src/config.ts`,
-`web/src/lib/config.ts` — showing a diff first. Missing one leaves a board
-talking quietly to the old server, which looks exactly like a board that is not
-working at all.
+Rewrites the host everywhere it appears — every sketch declaring `WS_HOST`,
+plus `mobile/src/config.ts` and `web/src/lib/config.ts` — showing what it found
+first. The sketches are located by searching rather than from a hardcoded list,
+so a newly added rover is covered automatically.
+
+Missing one leaves a board talking quietly to the old server, which looks
+exactly like a board that is not working at all.
 
 Then:
 

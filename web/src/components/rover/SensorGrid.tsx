@@ -7,6 +7,9 @@ import {
   Sprout,
   Sun,
   Gauge,
+  Ruler,
+  OctagonAlert,
+  Lightbulb,
   Activity,
   type LucideIcon,
 } from 'lucide-react';
@@ -22,6 +25,9 @@ const ICONS: Record<string, LucideIcon> = {
   sprout: Sprout,
   sun: Sun,
   gauge: Gauge,
+  ruler: Ruler,
+  'octagon-alert': OctagonAlert,
+  lightbulb: Lightbulb,
 };
 
 const HISTORY = 40;
