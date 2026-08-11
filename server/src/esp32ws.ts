@@ -163,14 +163,37 @@ export function setCameraStreaming(roverMac: string, on: boolean): boolean {
 export function startESP32WebSocket(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
 
+  /*
+    Two WebSocket servers share this HTTP server: this one on ESP32_PATH for
+    boards, and socket.io on /socket.io/ for the apps.
+
+    Node calls EVERY 'upgrade' listener for every upgrade request. So this
+    handler sees socket.io's upgrades too, and destroying "anything not mine"
+    tore down the app transport before socket.io could answer it.
+
+    That failure is invisible from the outside. socket.io opens on HTTP
+    long-polling and only then tries to upgrade, so a killed upgrade is not an
+    error — it is a silent fallback. The console and the phone kept working,
+    on polling, paying a round trip per command and per telemetry frame
+    forever. Which is a latency bug wearing the costume of a working app.
+
+    Anything on socket.io's path is therefore left strictly alone.
+  */
   server.on('upgrade', (req, socket, head) => {
-    if (req.url === ESP32_PATH) {
+    const url = req.url ?? '';
+
+    if (url === ESP32_PATH) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req);
       });
-    } else {
-      socket.destroy();
+      return;
     }
+
+    // socket.io's own listener handles these. Returning rather than
+    // destroying is the entire fix.
+    if (url.startsWith('/socket.io/')) return;
+
+    socket.destroy();
   });
 
   console.log(`[esp32] WebSocket ready on ${ESP32_PATH}`);
