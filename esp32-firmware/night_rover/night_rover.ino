@@ -640,8 +640,23 @@ void sendTelemetry() {
   doc["type"] = "telemetry";
   JsonObject readings = doc.createNestedObject("readings");
   if (distanceCm > 0) readings["distanceCm"] = distanceCm;
+
+  // `obstacle` is the decision the rover acted on; `irBlocked` is one of the
+  // two inputs to it. Both are sent because they disagree in the case worth
+  // seeing: the IR triggering alone means something is close and angled or
+  // soft enough that the ultrasonic missed it entirely.
   readings["obstacle"] = obstacleAhead() ? 1 : 0;
+  readings["irBlocked"] = irBlocked ? 1 : 0;
   readings["headlight"] = lightLevel;
+
+  /*
+    Bearing, for when the sensor is on a servo.
+
+    Fixed forward it is always 0, and the console plots contacts on the
+    centreline. Sending it now means adding the servo later is a firmware
+    change alone — the radar already reads whatever bearing arrives.
+  */
+  readings["bearingDeg"] = 0;
 
   String msg;
   serializeJson(doc, msg);

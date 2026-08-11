@@ -12,6 +12,7 @@ import {
   Cpu,
   MonitorSmartphone,
   History,
+  Radar,
   type LucideIcon,
 } from 'lucide-react';
 import AppShell from '../components/AppShell';
@@ -19,6 +20,7 @@ import Joystick from '../components/rover/Joystick';
 import DPad from '../components/rover/DPad';
 import CameraView from '../components/rover/CameraView';
 import SensorGrid from '../components/rover/SensorGrid';
+import RadarScope from '../components/rover/RadarScope';
 import BoardRoster from '../components/rover/BoardRoster';
 import DisplayComposer from '../components/rover/DisplayComposer';
 import HistoryPanel from '../components/rover/HistoryPanel';
@@ -34,10 +36,11 @@ import { useRoverLink } from '../hooks/useRoverLink';
 import { getRover } from '../lib/store';
 import { cn } from '../lib/cn';
 
-type Tab = 'sensors' | 'history' | 'boards' | 'panel';
+type Tab = 'sensors' | 'radar' | 'history' | 'boards' | 'panel';
 
 const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'sensors', label: 'Sensors', icon: Thermometer },
+  { id: 'radar', label: 'Radar', icon: Radar },
   { id: 'history', label: 'History', icon: History },
   { id: 'boards', label: 'Boards', icon: Cpu },
   { id: 'panel', label: 'Panel', icon: MonitorSmartphone },
@@ -317,6 +320,9 @@ export default function Control() {
                     >
                       {tab === 'sensors' && (
                         <SensorGrid readings={link.readings} hasHub={link.hasSensorHub} />
+                      )}
+                      {tab === 'radar' && (
+                        <RadarScope readings={link.readings} connected={link.connected} />
                       )}
                       {tab === 'history' && <HistoryPanel mac={rover.macAddress} />}
                       {tab === 'boards' && <BoardRoster boards={link.boards} />}
