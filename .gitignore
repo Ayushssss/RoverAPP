@@ -17,3 +17,7 @@ coverage/
 .claude/
 # Feature removed from the build but kept on disk for reference
 .attic/
+
+# Supabase credentials for the handset. supabase_config.example.h is the
+# committed template; the real one holds the project key and stays local.
+esp32-firmware/handheld_controller/supabase_config.h

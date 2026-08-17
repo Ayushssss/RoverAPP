@@ -75,6 +75,7 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include "wifi_provision.h"
+#include "supabase_client.h"
 
 /*
   ── WiFi ──
@@ -227,8 +228,23 @@ const uint16_t C_PANEL   = 0x18E3;  // near-black panel fill
 
 /* ── Pages ────────────────────────────────────────────────── */
 
-enum Page : uint8_t { PAGE_DRIVE = 0, PAGE_CAMERA, PAGE_SENSORS, PAGE_LINK, PAGE_WIFI, PAGE_COUNT };
-const char* PAGE_NAME[PAGE_COUNT] = { "DRIVE", "CAMERA", "SENSORS", "LINK", "WIFI" };
+/*
+  LOGIN and ROVERS sit at the end rather than in reading order.
+
+  changePage() cycles 0..PAGE_CYCLE_COUNT, so everything below that bound is in
+  the rotation and everything above it can only be reached deliberately. Sign-in
+  and rover selection are destinations, not places to land while thumbing
+  through pages mid-drive.
+*/
+enum Page : uint8_t {
+  PAGE_DRIVE = 0, PAGE_RADAR, PAGE_CAMERA, PAGE_SENSORS, PAGE_LINK, PAGE_WIFI,
+  PAGE_CYCLE_COUNT,
+  PAGE_LOGIN = PAGE_CYCLE_COUNT, PAGE_ROVERS, PAGE_GREET,
+  PAGE_COUNT
+};
+const char* PAGE_NAME[PAGE_COUNT] = {
+  "DRIVE", "RADAR", "CAMERA", "SENSORS", "LINK", "WIFI", "SIGN IN", "ROVERS", "HELLO"
+};
 
 Page page = PAGE_DRIVE;
 /** Forces a full repaint. Set on page change; cleared once drawn. */
@@ -308,6 +324,53 @@ int wifiSel = 0;
 const char* wifiNote = "";
 unsigned long wifiNoteAt = 0;
 
+/* ── account and rovers ───────────────────────────────────── */
+
+/*
+  The rover this handset steers is now chosen from the account, not compiled in.
+
+  ROVER_MAC above is the fallback for a handset that has never signed in — it
+  keeps the old behaviour working rather than bricking the pad behind a login
+  screen for someone who only wants to drive.
+*/
+supa::Rover myRovers[supa::MAX_ROVERS];
+int roverCount = 0;
+int roverSel = 0;
+String activeRoverMac = ROVER_MAC;
+String activeRoverName = "default";
+
+/** Sign-in progress, so the screen can say which step is slow. */
+enum AuthState : uint8_t { AUTH_OUT = 0, AUTH_WORKING, AUTH_IN, AUTH_FAILED };
+AuthState authState = AUTH_OUT;
+String authEmail;
+String authNote;
+
+/* ── greeting ─────────────────────────────────────────────── */
+
+/*
+  Shown after sign-in, then it gets out of the way.
+
+  A greeting that needs dismissing is a greeting that annoys you by the third
+  time. This one is on a timer, and any button skips it.
+*/
+const unsigned long GREET_MS = 2600;
+unsigned long greetAt = 0;
+int greetIdx = 0;
+
+/* ── radar ────────────────────────────────────────────────── */
+
+/** Matches STOP_CM in night_rover.ino. */
+const float RADAR_STOP_CM = 25.0f;
+/** Outer ring. Past this the HC-SR04 rarely returns anything usable. */
+const float RADAR_RANGE_CM = 200.0f;
+
+/** Recent contacts, newest last, for the fading trail. */
+const int RADAR_TRAIL = 10;
+struct Blip { float range; float bearing; unsigned long at; };
+Blip radarTrail[RADAR_TRAIL];
+int radarTrailCount = 0;
+float lastPlottedRange = -1;
+
 /* ── on-screen keyboard ───────────────────────────────────── */
 
 /*
@@ -358,6 +421,19 @@ char kbBuf[65] = {0};
 int kbLen = 0;
 /** The network being typed for, captured when the keyboard opened. */
 String kbSsid;
+
+/*
+  What the keyboard is collecting, so one grid serves three jobs.
+
+  The alternative was a callback pointer, which on a sketch this size buys
+  indirection and costs the ability to read what DONE does without chasing a
+  function pointer.
+*/
+enum KbTarget : uint8_t { KB_T_WIFI = 0, KB_T_EMAIL, KB_T_PASSWORD };
+KbTarget kbTarget = KB_T_WIFI;
+/** Title above the field, and whether to print dots instead of characters. */
+const char* kbTitle = "";
+bool kbMask = false;
 
 /** Re-scanned this often while the WiFi page is open, and not at all otherwise. */
 const unsigned long RESCAN_MS = 15000;
@@ -550,7 +626,9 @@ void sendRegistration() {
   doc["type"] = "register";
   doc["macAddress"] = WiFi.macAddress();
   doc["role"] = "controller";
-  doc["roverMac"] = ROVER_MAC;
+  // The rover chosen from the account, or the compiled-in fallback if this
+  // handset has never signed in.
+  doc["roverMac"] = activeRoverMac;
   doc["ip"] = WiFi.localIP().toString();
 
   String out;
@@ -842,7 +920,7 @@ void paintLink(bool full) {
     String(WiFi.RSSI()) + " dBm",
     WiFi.localIP().toString(),
     linked ? String("connected") : String("offline"),
-    String(ROVER_MAC).substring(9),
+    activeRoverMac.substring(9),
     String(millis() / 1000) + "s",
   };
   const char* labels[6] = { "WiFi", "RSSI", "IP", "Relay", "Rover", "Up" };
@@ -1029,15 +1107,29 @@ const char* kbCtrlLabel(int col) {
   }
 }
 
-void kbOpen(const String& ssid) {
+/** Open the grid for one field. `seed` prefills it, for editing an email. */
+void kbOpenFor(KbTarget target, const char* title, bool mask, const String& seed = "") {
   kbActive = true;
-  kbSsid = ssid;
+  kbTarget = target;
+  kbTitle = title;
+  kbMask = mask;
   kbLen = 0;
   kbBuf[0] = '\0';
+  if (seed.length() && seed.length() < sizeof(kbBuf)) {
+    strncpy(kbBuf, seed.c_str(), sizeof(kbBuf) - 1);
+    kbLen = strlen(kbBuf);
+  }
   kbRow = 0;
   kbCol = 0;
+  // Email starts lower-case, since addresses effectively always are, and the
+  // first thing you would otherwise do is press shift off.
   kbLayout = KB_L_LOWER;
   pageDirty = true;
+}
+
+void kbOpen(const String& ssid) {
+  kbSsid = ssid;
+  kbOpenFor(KB_T_WIFI, "WiFi password", true);
 }
 
 void kbClose() {
@@ -1059,9 +1151,11 @@ void paintKeyboard(bool full) {
     tft.fillRect(0, 0, SCREEN_W, HEADER_H, C_PANEL);
     tft.setTextSize(1);
     tft.setTextColor(C_ACCENT, C_PANEL);
-    tft.drawString("PASSWORD", 4, 4);
-    tft.setTextColor(C_DIM, C_PANEL);
-    tft.drawString(kbSsid.substring(0, 14), 70, 4);
+    tft.drawString(kbTitle, 4, 4);
+    if (kbTarget == KB_T_WIFI) {
+      tft.setTextColor(C_DIM, C_PANEL);
+      tft.drawString(kbSsid.substring(0, 12), 78, 4);
+    }
     drawFooter("pad moves - CENTRE picks");
   }
 
@@ -1075,7 +1169,30 @@ void paintKeyboard(bool full) {
   tft.setTextSize(1);
   tft.setTextColor(C_INK, C_BG);
   tft.setTextPadding(SCREEN_W - 12);
-  tft.drawString(kbLen ? String(kbBuf) : String("(empty)"), 6, 20);
+  /*
+    A password is shown as dots, an email in full.
+
+    An address is typed once and mistyped often, and hiding it means the only
+    way to check it is to sign in and see whether it worked. A password is the
+    one worth covering, because it is the one somebody could be reading over
+    your shoulder in a field.
+
+    The last character stays visible while typing either way — on a pad with no
+    tactile feedback, dots alone make a wrong keypress invisible until the whole
+    attempt fails.
+  */
+  String shown;
+  if (!kbLen) {
+    shown = "(empty)";
+  } else if (kbMask) {
+    for (int i = 0; i < kbLen - 1; i++) shown += '*';
+    shown += kbBuf[kbLen - 1];
+  } else {
+    // Right-aligned to the tail once it overflows, so you can see what you are
+    // typing rather than the beginning of something long.
+    shown = kbLen > 20 ? String(kbBuf + kbLen - 20) : String(kbBuf);
+  }
+  tft.drawString(shown, 6, 20);
   tft.setTextPadding(0);
 
   tft.setTextColor(C_DIM, C_BG);
@@ -1139,23 +1256,36 @@ bool handleKeyboard() {
           kbLayout = (kbLayout == KB_L_SYM) ? KB_L_LOWER : KB_L_SYM;
           break;
         case KB_DONE: {
+          const KbTarget target = kbTarget;
+          const String typed = String(kbBuf);
           const String ssid = kbSsid;
-          const String pass = String(kbBuf);
           kbClose();
 
-          drawFooter("joining...");
-          if (wifiprov::join(ssid, pass)) {
-            wifiprov::save(ssid, pass);
-            wifiNote = "joined and saved";
-            ws.disconnect();
-            ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
-          } else {
-            // Left alone on failure: a wrong password must not cost the
-            // network that was working.
-            wifiNote = "wrong password?";
+          if (target == KB_T_WIFI) {
+            drawFooter("joining...");
+            if (wifiprov::join(ssid, typed)) {
+              wifiprov::save(ssid, typed);
+              wifiNote = "joined and saved";
+              ws.disconnect();
+              ws.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+            } else {
+              // Left alone on failure: a wrong password must not cost the
+              // network that was working.
+              wifiNote = "wrong password?";
+            }
+            wifiNoteAt = millis();
+            page = PAGE_WIFI;
           }
-          wifiNoteAt = millis();
-          page = PAGE_WIFI;
+          else if (target == KB_T_EMAIL) {
+            // Straight on to the password rather than back to a form. Two
+            // fields is not a form worth building on a five-button pad.
+            authEmail = typed;
+            authEmail.trim();
+            kbOpenFor(KB_T_PASSWORD, "Password", true);
+          }
+          else {
+            beginSignIn(authEmail, typed);
+          }
           pageDirty = true;
           return true;
         }
@@ -1172,17 +1302,360 @@ bool handleKeyboard() {
   return true;
 }
 
+/* ══════════════ Account, rovers, greeting, radar ══════════════ */
+
+/*
+  ── Drawn glyphs, not emoji ───────────────────────────────────
+
+  The screen has no emoji. TFT_eSPI's bundled fonts are 7-bit ASCII, so a real
+  emoji is not a character it is missing — there is no glyph table to miss it
+  from, and printing one puts a blank box on screen.
+
+  These are drawn from primitives instead: a few circles and lines each, at the
+  size the panel can actually resolve. They read as the thing they are meant to
+  be at 160x128, which a downscaled colour bitmap would not, and they cost
+  bytes rather than kilobytes.
+*/
+
+void glyphSmile(int16_t x, int16_t y, uint16_t c) {
+  tft.drawCircle(x, y, 8, c);
+  tft.fillCircle(x - 3, y - 3, 1, c);
+  tft.fillCircle(x + 3, y - 3, 1, c);
+  // Mouth: an arc approximated by three chords, which at this size is
+  // indistinguishable from a curve and far cheaper than trig.
+  tft.drawLine(x - 4, y + 2, x - 2, y + 4, c);
+  tft.drawLine(x - 2, y + 4, x + 2, y + 4, c);
+  tft.drawLine(x + 2, y + 4, x + 4, y + 2, c);
+}
+
+void glyphMoon(int16_t x, int16_t y, uint16_t c) {
+  tft.fillCircle(x, y, 8, c);
+  // Bite out of it with the background colour — a crescent for the cost of
+  // two circles.
+  tft.fillCircle(x + 4, y - 3, 7, C_BG);
+}
+
+void glyphSprout(int16_t x, int16_t y, uint16_t c) {
+  tft.drawLine(x, y + 7, x, y - 2, c);
+  tft.fillCircle(x - 4, y - 2, 3, c);
+  tft.fillCircle(x + 4, y - 4, 3, c);
+}
+
+void glyphBolt(int16_t x, int16_t y, uint16_t c) {
+  tft.fillTriangle(x + 2, y - 8, x - 4, y + 1, x + 1, y + 1, c);
+  tft.fillTriangle(x - 1, y + 8, x + 4, y - 1, x - 1, y - 1, c);
+}
+
+void glyphWave(int16_t x, int16_t y, uint16_t c) {
+  // A hand: palm plus four fingers.
+  tft.fillRoundRect(x - 4, y - 1, 9, 8, 2, c);
+  for (int i = 0; i < 4; i++) tft.drawFastVLine(x - 3 + i * 3, y - 6, 6, c);
+}
+
+/** Greetings, paired with the glyph that suits them. */
+struct Greeting { const char* line; void (*glyph)(int16_t, int16_t, uint16_t); uint16_t colour; };
+
+const Greeting GREETINGS[] = {
+  { "Ready to roll",   glyphSmile,  C_ACCENT  },
+  { "Field awaits",    glyphSprout, C_OK      },
+  { "Night shift on",  glyphMoon,   C_PRIMARY },
+  { "Fully charged",   glyphBolt,   C_ACCENT  },
+  { "Welcome back",    glyphWave,   C_OK      },
+};
+const int GREETING_COUNT = sizeof(GREETINGS) / sizeof(GREETINGS[0]);
+
+void showGreeting() {
+  // Seeded from the clock so it is not the same line every power-on. Not
+  // random enough for anything that matters, plenty for a hello.
+  greetIdx = (int)(millis() / 7) % GREETING_COUNT;
+  greetAt = millis();
+  page = PAGE_GREET;
+  pageDirty = true;
+}
+
+void paintGreet(bool full) {
+  if (!full) return;
+  const Greeting& g = GREETINGS[greetIdx];
+
+  tft.fillScreen(C_BG);
+  g.glyph(SCREEN_W / 2, 40, g.colour);
+
+  tft.setTextSize(1);
+  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(C_INK, C_BG);
+  tft.drawString(g.line, SCREEN_W / 2, 60);
+
+  tft.setTextColor(C_DIM, C_BG);
+  // The address, tail-first if it is long: the domain identifies the account
+  // more usefully than the first twelve characters of the local part.
+  String who = supa::userEmail.length() ? supa::userEmail : String("not signed in");
+  if (who.length() > 24) who = who.substring(who.length() - 24);
+  tft.drawString(who, SCREEN_W / 2, 76);
+
+  if (roverCount > 0) {
+    tft.setTextColor(C_ACCENT, C_BG);
+    tft.drawString(String(roverCount) + (roverCount == 1 ? " rover" : " rovers") + " linked",
+                   SCREEN_W / 2, 92);
+  }
+  tft.setTextDatum(TL_DATUM);
+  drawFooter("any key to continue");
+}
+
+/** Adopt one of the fetched rovers as the one this handset drives. */
+void selectRover(int index) {
+  if (index < 0 || index >= roverCount) return;
+  roverSel = index;
+  activeRoverMac = myRovers[index].mac;
+  activeRoverName = myRovers[index].name;
+  Serial.printf("[rover] now driving %s (%s)\n",
+                activeRoverName.c_str(), activeRoverMac.c_str());
+  // Re-register so the relay routes this rover's traffic to us. Without it the
+  // handset keeps talking about the previous MAC and the new rover never moves.
+  sendRegistration();
+}
+
+/** Ask Supabase for this account's rovers and adopt the first one. */
+void loadRovers() {
+  roverCount = supa::fetchRovers(myRovers, supa::MAX_ROVERS);
+  if (roverCount < 0) {
+    roverCount = 0;
+    authNote = supa::lastError;
+    return;
+  }
+  if (roverCount > 0) selectRover(0);
+}
+
+/**
+ * Sign in, on the main loop, with the screen already saying so.
+ *
+ * The HTTPS round trip takes a second or two and blocks. Painting "signing
+ * in..." *before* starting it is the whole point — otherwise the handset looks
+ * frozen for the exact duration of the thing the user is waiting for.
+ */
+void beginSignIn(const String& email, const String& password) {
+  authState = AUTH_WORKING;
+  authNote = "";
+  page = PAGE_LOGIN;
+  paint(true);
+
+  if (supa::signIn(email, password)) {
+    authState = AUTH_IN;
+    loadRovers();
+    showGreeting();
+  } else {
+    authState = AUTH_FAILED;
+    authNote = supa::lastError;
+    pageDirty = true;
+  }
+}
+
+void paintLogin(bool full) {
+  if (!full) return;
+
+  tft.setTextSize(1);
+  tft.setTextDatum(TC_DATUM);
+
+  if (authState == AUTH_WORKING) {
+    tft.setTextColor(C_ACCENT, C_BG);
+    tft.drawString("signing in...", SCREEN_W / 2, 52);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString(authEmail.substring(0, 24), SCREEN_W / 2, 70);
+    tft.setTextDatum(TL_DATUM);
+    drawFooter("talking to supabase");
+    return;
+  }
+
+  glyphSmile(SCREEN_W / 2, 34, C_ACCENT);
+  tft.setTextColor(C_INK, C_BG);
+  tft.drawString("Sign in to AgriVerse", SCREEN_W / 2, 52);
+
+  if (authState == AUTH_FAILED && authNote.length()) {
+    tft.setTextColor(C_BAD, C_BG);
+    tft.drawString(authNote.substring(0, 26), SCREEN_W / 2, 68);
+  } else {
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("same account as the app", SCREEN_W / 2, 68);
+  }
+
+  tft.setTextColor(C_PRIMARY, C_BG);
+  tft.drawString("CENTRE to enter email", SCREEN_W / 2, 90);
+  tft.setTextDatum(TL_DATUM);
+  drawFooter("hold CENTRE to skip");
+}
+
+void paintRovers(bool full) {
+  if (full) {
+    tft.setTextSize(1);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("your rovers", 6, 18);
+  }
+
+  const int16_t top = 32;
+  const int16_t rowH = 16;
+
+  if (roverCount == 0) {
+    tft.setTextColor(C_DIM, C_BG);
+    tft.setTextPadding(SCREEN_W - 12);
+    tft.drawString(authNote.length() ? authNote.substring(0, 24) : String("none on this account"),
+                   6, top);
+    tft.setTextPadding(0);
+    drawFooter("add one in the app");
+    return;
+  }
+
+  for (int i = 0; i < roverCount && i < 5; i++) {
+    const int16_t y = top + i * rowH;
+    const bool on = i == roverSel;
+    tft.fillRect(2, y - 2, SCREEN_W - 4, rowH - 2, on ? C_PANEL : C_BG);
+    if (on) tft.drawRect(2, y - 2, SCREEN_W - 4, rowH - 2, C_ACCENT);
+
+    // A tick against the one actually being driven, which is not always the
+    // one highlighted — the pad moves the highlight, CENTRE commits it.
+    const bool active = myRovers[i].mac == activeRoverMac;
+    tft.setTextColor(active ? C_OK : (on ? C_INK : C_DIM), on ? C_PANEL : C_BG);
+    tft.drawString(String(active ? "* " : "  ") + myRovers[i].name.substring(0, 16), 6, y + 2);
+  }
+  drawFooter("CENTRE selects");
+}
+
+/* ── radar ────────────────────────────────────────────────── */
+
+/** Latest value for a telemetry key, or `fallback` if it has not arrived. */
+float readingOr(const char* key, float fallback) {
+  for (int i = 0; i < MAX_READINGS; i++) {
+    if (readings[i].used && strcmp(readings[i].key, key) == 0) return readings[i].value;
+  }
+  return fallback;
+}
+
+/**
+ * Keep a short trail of contacts.
+ *
+ * Only distinct ranges are pushed. Telemetry arrives twice a second whether or
+ * not anything changed, and appending every frame would stack identical blips
+ * on one spot until the trail was a solid dot.
+ */
+void radarPush(float range, float bearing) {
+  if (range <= 0) return;
+  if (lastPlottedRange > 0 && fabsf(range - lastPlottedRange) < 2.0f) return;
+  lastPlottedRange = range;
+
+  if (radarTrailCount < RADAR_TRAIL) {
+    radarTrail[radarTrailCount++] = { range, bearing, millis() };
+  } else {
+    for (int i = 1; i < RADAR_TRAIL; i++) radarTrail[i - 1] = radarTrail[i];
+    radarTrail[RADAR_TRAIL - 1] = { range, bearing, millis() };
+  }
+}
+
+void paintRadar(bool full) {
+  // The rover sits at the bottom centre looking up the screen, matching the
+  // console's scope so the two do not have to be read differently.
+  const int16_t cx = SCREEN_W / 2;
+  const int16_t cy = SCREEN_H - FOOTER_H - 4;
+  const int16_t rMax = 84;
+
+  const float range = readingOr("distanceCm", -1);
+  const float bearing = readingOr("bearingDeg", 0);
+  const bool irBlocked = readingOr("irBlocked", 0) > 0;
+  const bool blocked = readingOr("obstacle", 0) > 0;
+
+  if (full) {
+    tft.fillScreen(C_BG);
+    drawHeader();
+
+    // Range rings, quartered, with the outermost labelled.
+    for (int i = 1; i <= 4; i++) {
+      tft.drawCircle(cx, cy, (rMax * i) / 4, i == 4 ? C_DIM : C_PANEL);
+    }
+    // The band the rover refuses to enter.
+    tft.drawCircle(cx, cy, (int16_t)(RADAR_STOP_CM / RADAR_RANGE_CM * rMax), C_BAD);
+
+    tft.setTextSize(1);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString(String((int)RADAR_RANGE_CM), cx + 3, cy - rMax + 2);
+    tft.drawString("cm", cx + 3, cy - rMax + 12);
+  }
+
+  // Wipe only the plotting area, so the rings are not redrawn every frame —
+  // a full clear at 4Hz reads as a flicker on this panel.
+  tft.fillRect(0, HEADER_H + 1, SCREEN_W, 24, C_BG);
+
+  tft.setTextSize(1);
+  tft.setTextDatum(TL_DATUM);
+  if (range > 0) {
+    tft.setTextColor(range < RADAR_STOP_CM ? C_BAD : C_OK, C_BG);
+    tft.drawString(String((int)range) + " cm", 6, HEADER_H + 5);
+  } else {
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("no echo", 6, HEADER_H + 5);
+  }
+  if (irBlocked) {
+    tft.setTextColor(C_BAD, C_BG);
+    tft.drawString("IR", SCREEN_W - 60, HEADER_H + 5);
+  }
+  if (blocked) {
+    tft.setTextColor(C_BAD, C_BG);
+    tft.drawString("STOP", SCREEN_W - 34, HEADER_H + 5);
+  }
+
+  radarPush(range, bearing);
+
+  // Redraw the fan area, then the trail and the live contact over it.
+  tft.fillRect(cx - rMax - 1, cy - rMax - 1, (rMax + 1) * 2, rMax - 8, C_BG);
+  for (int i = 1; i <= 4; i++) tft.drawCircle(cx, cy, (rMax * i) / 4, i == 4 ? C_DIM : C_PANEL);
+  tft.drawCircle(cx, cy, (int16_t)(RADAR_STOP_CM / RADAR_RANGE_CM * rMax), C_BAD);
+
+  const unsigned long now = millis();
+  for (int i = 0; i < radarTrailCount; i++) {
+    if (now - radarTrail[i].at > 4000) continue;
+    const float rad = radarTrail[i].bearing * PI / 180.0f;
+    const float rr = fminf(radarTrail[i].range / RADAR_RANGE_CM, 1.0f) * rMax;
+    const int16_t x = cx + (int16_t)(rr * sinf(rad));
+    const int16_t y = cy - (int16_t)(rr * cosf(rad));
+    tft.fillCircle(x, y, 1, C_PANEL);
+  }
+
+  if (range > 0) {
+    const float rad = bearing * PI / 180.0f;
+    const float rr = fminf(range / RADAR_RANGE_CM, 1.0f) * rMax;
+    const int16_t x = cx + (int16_t)(rr * sinf(rad));
+    const int16_t y = cy - (int16_t)(rr * cosf(rad));
+    const uint16_t c = range < RADAR_STOP_CM ? C_BAD : C_OK;
+    tft.fillCircle(x, y, 3, c);
+    tft.drawCircle(x, y, 6, c);
+  }
+
+  // The rover itself, drawn last so nothing covers it.
+  tft.fillCircle(cx, cy, 3, C_PRIMARY);
+  if (irBlocked) tft.drawCircle(cx, cy, 8, C_BAD);
+
+  if (full) drawFooter(activeRoverName.substring(0, 20).c_str());
+}
+
 void paint(bool full) {
   if (kbActive) { paintKeyboard(full); return; }
-  if (full) tft.fillScreen(C_BG);
-  drawHeader();
+
+  // The greeting and the radar own the whole panel — they clear and draw their
+  // own chrome. Painting the standard background and header underneath them
+  // would be drawn once and immediately covered, which on this display is a
+  // visible flash on every repaint.
+  const bool fullBleed = (page == PAGE_GREET || page == PAGE_RADAR);
+  if (!fullBleed) {
+    if (full) tft.fillScreen(C_BG);
+    drawHeader();
+  }
 
   switch (page) {
     case PAGE_DRIVE:   paintDrive(full);   break;
+    case PAGE_RADAR:   paintRadar(full);   break;
     case PAGE_CAMERA:  paintCamera(full);  break;
     case PAGE_SENSORS: paintSensors(full); break;
     case PAGE_LINK:    paintLink(full);    break;
     case PAGE_WIFI:    paintWifi(full);    break;
+    case PAGE_LOGIN:   paintLogin(full);   break;
+    case PAGE_ROVERS:  paintRovers(full);  break;
+    case PAGE_GREET:   paintGreet(full);   break;
     default: break;
   }
 }
@@ -1201,12 +1674,44 @@ void changePage(int delta) {
     sendInput(0, 0);
     sendCommand("stop", 1);
   }
-  page = (Page)((page + PAGE_COUNT + delta) % PAGE_COUNT);
+  /*
+    Only the cycle pages are in the rotation.
+
+    Landing on the sign-in screen by thumbing past CAMERA would be a nuisance
+    at best and, mid-drive, a way to lose the pad entirely. They are reachable
+    from the LINK page and from boot, where getting there is deliberate.
+
+    From a non-cycle page, any step returns to DRIVE rather than continuing
+    from an index that is outside the range — which would otherwise walk
+    further into the pages that are not supposed to be in the cycle.
+  */
+  if (page >= PAGE_CYCLE_COUNT) {
+    page = PAGE_DRIVE;
+  } else {
+    page = (Page)((page + PAGE_CYCLE_COUNT + delta) % PAGE_CYCLE_COUNT);
+  }
   pageDirty = true;
 
   // Scan on arrival, so the list is already filling by the time the page is
   // drawn rather than sitting empty until the first refresh tick.
   if (page == PAGE_WIFI) startScan();
+}
+
+/**
+ * The home shortcut: straight back to the drive page from anywhere.
+ *
+ * Bound to a CENTRE hold, which is free everywhere except the drive page —
+ * there it already means "steer by tilt", and a page you are already on is not
+ * one you need a shortcut to.
+ */
+const unsigned long HOME_HOLD_MS = 600;
+
+void goHome() {
+  if (needsWifi) return;
+  if (kbActive) kbClose();
+  page = PAGE_DRIVE;
+  pageDirty = true;
+  Serial.println("[ui] home");
 }
 
 void disarm(const char* why) {
@@ -1258,14 +1763,59 @@ void handleButtons() {
     decided until release, because until then a press could still become
     either — which is why the page change happens on the *up* edge.
   */
+  /*
+    ── the greeting ───────────────────────────────────────────
+    Any button dismisses it, and that press does nothing else — otherwise the
+    keypress that skips a hello also changes a page or starts the rover.
+  */
+  if (page == PAGE_GREET) {
+    for (int i = 0; i < BTN_COUNT; i++) {
+      if (buttons[i].justPressed) { goHome(); return; }
+    }
+    return;
+  }
+
   if (buttons[B_CENTRE].justReleased) {
     const unsigned long heldFor = millis() - buttons[B_CENTRE].pressedAt;
+
+    // Home, from anywhere that is not the drive page. Checked before the tilt
+    // and page-cycle cases so a hold cannot also disarm or advance a page.
+    if (page != PAGE_DRIVE && heldFor >= HOME_HOLD_MS) {
+      goHome();
+      return;
+    }
+
     if (driveMode == DRIVE_TILT) {
       disarm("centre released");
+    } else if (page == PAGE_LOGIN) {
+      // Tap starts sign-in; the hold above already handled skipping.
+      if (heldFor < TAP_MS) kbOpenFor(KB_T_EMAIL, "Email", false, supa::userEmail);
+    } else if (page == PAGE_ROVERS) {
+      if (heldFor < TAP_MS) selectRover(roverSel);
+      pageDirty = true;
     } else if (heldFor < TAP_MS) {
       changePage(1);
     }
   }
+
+  /*
+    ── the rover picker owns the pad ──────────────────────────
+    Same reasoning as the WiFi page below: a chooser is not a place anyone is
+    also steering from, and one button meaning two things is worse than either.
+  */
+  if (page == PAGE_ROVERS) {
+    if (buttons[B_FRONT].justPressed && roverCount) {
+      roverSel = (roverSel + roverCount - 1) % roverCount;
+    }
+    if (buttons[B_BACK].justPressed && roverCount) {
+      roverSel = (roverSel + 1) % roverCount;
+    }
+    if (buttons[B_LEFT].justPressed) goHome();
+    return;
+  }
+
+  // Nothing on the sign-in screen drives anything.
+  if (page == PAGE_LOGIN) return;
 
   if (buttons[B_LIGHT].activated) {
     /*
@@ -1465,6 +2015,41 @@ void setup() {
   ws.onEvent(webSocketEvent);
   ws.setReconnectInterval(3000);
 
+  /*
+    ── Account ────────────────────────────────────────────────
+
+    Only attempted once there is a network — every call here is HTTPS, and on
+    a handset with no WiFi they would each burn their timeout before the pad
+    became usable.
+
+    A stored refresh token is traded for a fresh access token rather than
+    asking for the password again. Access tokens last an hour, so a handset
+    switched on the next morning has a session that is valid and a token that
+    is not; without the refresh the user would type their password daily.
+  */
+  if (!needsWifi) {
+    if (supa::loadSession()) {
+      Serial.printf("[supa] resuming session for %s\n", supa::userEmail.c_str());
+      tft.setTextDatum(TC_DATUM);
+      tft.setTextColor(C_DIM, C_BG);
+      tft.drawString("restoring session...", SCREEN_W / 2, 60);
+      tft.setTextDatum(TL_DATUM);
+
+      if (supa::refresh()) {
+        authState = AUTH_IN;
+        authEmail = supa::userEmail;
+        loadRovers();
+        showGreeting();
+      } else {
+        // refresh() has already cleared the dead session.
+        authState = AUTH_OUT;
+        page = PAGE_LOGIN;
+      }
+    } else {
+      page = PAGE_LOGIN;
+    }
+  }
+
   pageDirty = true;
 }
 
@@ -1479,14 +2064,31 @@ void loop() {
   if (needsWifi) {
     if (WiFi.isConnected()) {
       needsWifi = false;
-      page = PAGE_DRIVE;
-      pageDirty = true;
       Serial.println("[wifi] connected — carrying on");
+
+      /*
+        Sign-in was skipped at boot because there was no network to do it over.
+        Now there is, so take the chance — a stored session resumes silently and
+        the user never sees a login screen they did not need.
+      */
+      if (authState == AUTH_OUT && supa::loadSession() && supa::refresh()) {
+        authState = AUTH_IN;
+        authEmail = supa::userEmail;
+        loadRovers();
+        showGreeting();
+      } else {
+        page = authState == AUTH_IN ? PAGE_DRIVE : PAGE_LOGIN;
+      }
+      pageDirty = true;
     } else if (page != PAGE_WIFI) {
       page = PAGE_WIFI;
       pageDirty = true;
     }
   }
+
+  // The greeting steps aside on its own. Any button also skips it, handled in
+  // handleButtons.
+  if (page == PAGE_GREET && millis() - greetAt > GREET_MS) goHome();
 
   ws.loop();
   handleButtons();
