@@ -1,5 +1,5 @@
-import { io, type Socket } from 'socket.io-client';
-import { relayIdentity, relayUrl } from '../lib/store';
+import { db } from './supabase';
+import { relayUrl } from '../lib/store';
 
 /**
  * The relay connection.
@@ -10,16 +10,29 @@ import { relayIdentity, relayUrl } from '../lib/store';
  * commands would then drop silently — which looks identical to a rover that is
  * ignoring you.
  *
- * Wire format is the same one the phone speaks (mobile/src/services/websocket.ts):
- * `joystick`, `control`, `display` out; `telemetry`, `boards`, `camera-frame`,
- * `controller-input` back.
+ * ── Authentication ────────────────────────────────────────────────
+ * The socket carries the Supabase **access token**, not the user id. The relay
+ * verifies that signature against Supabase before accepting the connection.
+ * The previous version sent the raw uuid, which the server took on trust — a
+ * user id is not a secret, so anyone who learned yours could drive your rovers.
+ *
+ * Access tokens expire roughly hourly. A fresh one is read on *every* connect
+ * attempt rather than captured once, so a reconnect after a refresh cannot
+ * present a stale credential.
+ *
+ * ── Wire format ───────────────────────────────────────────────────
+ * JSON to the relay, which translates to the compact text the ESP32 speaks.
+ * Rooms are keyed by MAC, matching the rest of the app.
  */
 
-let socket: Socket | null = null;
-let connecting: Promise<Socket> | null = null;
-let holders = 0;
-
 export type LinkState = 'idle' | 'connecting' | 'up' | 'down';
+
+let socket: WebSocket | null = null;
+let holders = 0;
+let wantOpen = false;
+let retry = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let seq = 0;
 
 const stateListeners = new Set<(s: LinkState) => void>();
 let state: LinkState = 'idle';
@@ -40,63 +53,129 @@ export function onLinkState(listener: (s: LinkState) => void): () => void {
   return () => stateListeners.delete(listener);
 }
 
-export function connect(): Promise<Socket> {
-  if (socket?.connected) return Promise.resolve(socket);
-  if (connecting) return connecting;
+/* ── listener registries ──────────────────────────────────────────── */
 
-  // The relay refuses a connection with no token, so this is the signed-in
-  // user — or the override, for reaching a fleet paired from the phone.
-  const token = relayIdentity();
-  setState('connecting');
+type Fn = (...args: never[]) => void;
+const listeners: Record<string, Set<{ mac: string | null; fn: Fn }>> = {};
 
-  connecting = new Promise<Socket>((resolve, reject) => {
-    const next = io(relayUrl(), {
-      auth: { token },
-      transports: ['polling', 'websocket'],
-      // Per attempt. A free-tier host that has spun down takes the better part
-      // of a minute to wake, and the first attempt lands mid-boot.
-      timeout: 20000,
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-    });
-    socket = next;
+function on<T extends Fn>(event: string, mac: string | null, fn: T): () => void {
+  (listeners[event] ??= new Set()).add({ mac: mac ? normalize(mac) : null, fn });
+  const set = listeners[event];
+  return () => {
+    for (const e of set) if (e.fn === fn) set.delete(e);
+  };
+}
 
-    next.on('connect', () => {
-      setState('up');
-      resolve(next);
-    });
-    next.on('disconnect', () => setState('down'));
-    next.on('connect_error', (e) => {
-      // Not a rejection: socket.io keeps retrying and a cold start is expected
-      // to fail the first attempt or two. Giving up here is what leaves a
-      // screen stuck on "Reconnecting…" after the server has actually woken.
-      console.warn('[relay] connect_error (will retry):', e.message);
-      setState('connecting');
-    });
-
-    // Long stop so a cold start still resolves; pages track live state through
-    // `onLinkState`, so a late connection still lights them up.
-    setTimeout(() => {
-      if (!next.connected) reject(new Error('Could not reach the relay'));
-    }, 75000);
-  });
-
-  try {
-    return connecting;
-  } finally {
-    connecting = null;
+function emit(event: string, mac: string | null, ...args: unknown[]) {
+  const set = listeners[event];
+  if (!set) return;
+  for (const e of set) {
+    if (e.mac && mac && e.mac !== normalize(mac)) continue;
+    (e.fn as (...a: unknown[]) => void)(...args);
   }
 }
 
-export async function acquire(): Promise<Socket> {
-  holders += 1;
-  try {
-    return await connect();
-  } catch (e) {
-    holders = Math.max(0, holders - 1);
-    throw e;
+const normalize = (m: string) => m.toUpperCase().replace(/[^0-9A-F]/g, '');
+
+/** MACs we want subscribed; re-sent after every reconnect. */
+const subscriptions = new Set<string>();
+
+/* ── connection ───────────────────────────────────────────────────── */
+
+function wsUrl(token: string): string {
+  const base = relayUrl().replace(/\/$/, '');
+  const proto = base.startsWith('https') ? 'wss' : base.startsWith('http') ? 'ws' : 'ws';
+  const host = base.replace(/^https?:\/\//, '');
+  return `${proto}://${host}/ws?role=operator&token=${encodeURIComponent(token)}`;
+}
+
+async function accessToken(): Promise<string> {
+  const c = db();
+  if (!c) return '';
+  // getSession() returns the current token and refreshes it if it is close to
+  // expiry, so this is always the live one.
+  const { data } = await c.auth.getSession();
+  return data.session?.access_token ?? '';
+}
+
+async function open(): Promise<void> {
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
+  const token = await accessToken();
+  if (!token) {
+    console.warn('[relay] no Supabase session — not connecting');
+    setState('idle');
+    return;
   }
+
+  setState('connecting');
+  const next = new WebSocket(wsUrl(token));
+  socket = next;
+
+  next.onopen = () => {
+    retry = 0;
+    setState('up');
+    for (const mac of subscriptions) next.send(JSON.stringify({ t: 'sub', mac }));
+  };
+
+  next.onclose = () => {
+    if (socket === next) socket = null;
+    setState(wantOpen ? 'down' : 'idle');
+    if (wantOpen) scheduleRetry();
+  };
+
+  // The browser gives no detail here for security reasons; onclose follows and
+  // drives the retry, so this only needs to not be silent.
+  next.onerror = () => console.warn('[relay] socket error');
+
+  next.onmessage = (ev) => {
+    let m: Record<string, unknown>;
+    try { m = JSON.parse(String(ev.data)); } catch { return; }
+    const mac = typeof m.mac === 'string' ? m.mac : null;
+
+    switch (m.t) {
+      case 'telemetry':
+        emit('telemetry', mac, m.readings);
+        emit('link', mac, m.link);
+        break;
+      case 'presence':
+        emit('presence', mac, !!m.online, Number(m.operators) || 0);
+        break;
+      case 'role':
+        emit('role', mac, !!m.driving);
+        break;
+      case 'estop':
+        emit('estop', mac);
+        break;
+      case 'pong':
+        emit('pong', null, String(m.id));
+        break;
+      default:
+        break;
+    }
+  };
+}
+
+function scheduleRetry() {
+  if (retryTimer) return;
+  // A free-tier host that has spun down takes the better part of a minute to
+  // wake, so back off but keep trying rather than giving up.
+  const delay = Math.min(1000 * 2 ** retry, 15000);
+  retry += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (wantOpen) void open();
+  }, delay);
+}
+
+export function connect(): Promise<void> {
+  wantOpen = true;
+  return open();
+}
+
+export async function acquire(): Promise<void> {
+  holders += 1;
+  await connect();
 }
 
 export function release() {
@@ -106,46 +185,36 @@ export function release() {
 
 export function disconnect() {
   holders = 0;
-  socket?.disconnect();
+  wantOpen = false;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  subscriptions.clear();
+  socket?.close();
   socket = null;
   setState('idle');
 }
 
-export function getSocket(): Socket | null {
-  return socket;
-}
-
-/** Re-dial after the relay address or identity changed. */
+/** Re-dial after the relay address or the signed-in account changed. */
 export function reconnect() {
   const had = holders;
+  const subs = [...subscriptions];
   disconnect();
   holders = had;
-  if (had > 0) void connect();
+  subs.forEach((m) => subscriptions.add(m));
+  if (had > 0) { wantOpen = true; void open(); }
+}
+
+function send(obj: Record<string, unknown>): boolean {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(obj));
+  return true;
 }
 
 /* ── subscriptions ────────────────────────────────────────────────── */
 
-const sameMac = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
-
-/** Attach a handler that survives a reconnect and detaches cleanly. */
-function subscribe<T>(event: string, handler: (payload: T) => void): () => void {
-  const s = socket;
-  s?.on(event, handler as never);
-  return () => {
-    s?.off(event, handler as never);
-  };
-}
-
 export function registerRover(mac: string) {
-  socket?.emit('register-device', mac);
-}
-
-export function onDeviceIp(mac: string, listener: (ip: string) => void) {
-  return subscribe<{ macAddress: string; ip: string }>('device-ip', (d) => {
-    // `on`, not `once`: a board may register long after the console did, and a
-    // one-shot listener leaves the address unknown forever.
-    if (sameMac(d.macAddress, mac)) listener(d.ip);
-  });
+  const m = normalize(mac);
+  subscriptions.add(m);
+  send({ t: 'sub', mac: m });
 }
 
 export type BoardRole = 'rover' | 'camera' | 'sensor' | 'controller';
@@ -155,28 +224,54 @@ export interface BoardInfo {
   ip: string;
 }
 
-/**
- * The boards making up a rover, as they come and go. A rover is not one ESP32 —
- * drive, camera and sensor hub each hold their own connection and can restart
- * without the others noticing.
- */
-export function onBoards(mac: string, listener: (boards: BoardInfo[]) => void) {
-  return subscribe<{ macAddress: string; boards: BoardInfo[] }>('boards', (d) => {
-    if (sameMac(d.macAddress, mac)) listener(d.boards);
-  });
-}
-
 export function onTelemetry(mac: string, listener: (readings: Record<string, number>) => void) {
-  return subscribe<{ macAddress: string; readings: Record<string, number> }>('telemetry', (d) => {
-    if (sameMac(d.macAddress, mac)) listener(d.readings);
-  });
+  return on('telemetry', mac, listener as Fn);
 }
 
-/** Drive input from a paired physical tilt controller, mirrored back to us. */
-export function onControllerInput(mac: string, listener: (x: number, y: number) => void) {
-  return subscribe<{ macAddress: string; x: number; y: number }>('controller-input', (d) => {
-    if (sameMac(d.macAddress, mac)) listener(d.x, d.y);
-  });
+/** Which control link the rover is actually driving from (SBUS, nRF24, WiFi…). */
+export function onActiveLink(mac: string, listener: (link: string) => void) {
+  return on('link', mac, listener as Fn);
+}
+
+/** Whether the rover currently holds a connection to the relay. */
+export function onPresence(mac: string, listener: (online: boolean, operators: number) => void) {
+  return on('presence', mac, listener as Fn);
+}
+
+/** Whether this browser is the one allowed to drive, versus watching. */
+export function onDriving(mac: string, listener: (driving: boolean) => void) {
+  return on('role', mac, listener as Fn);
+}
+
+export function takeControl(mac: string): boolean {
+  return send({ t: 'takeover', mac: normalize(mac) });
+}
+
+/*
+  Below: capabilities this relay does not carry.
+
+  It moves drive commands and telemetry only. Camera streaming, the LCD, the
+  board roster and paired tilt controllers all live in the socket.io relay under
+  ../../server. Rather than throw — which would take down whichever page mounted
+  the component — these report "not available" so the UI hides the feature, the
+  same path it takes when a rover simply has no camera fitted.
+*/
+
+export function onDeviceIp(_mac: string, _listener: (ip: string) => void) {
+  return () => {};
+}
+
+export function onBoards(mac: string, listener: (boards: BoardInfo[]) => void) {
+  // Report the drive board as the only known member, so the roster shows the
+  // rover as present instead of appearing empty and broken.
+  const off = on('presence', mac, ((online: boolean) => {
+    listener(online ? [{ mac: normalize(mac), role: 'rover', ip: '' }] : []);
+  }) as Fn);
+  return off;
+}
+
+export function onControllerInput(_mac: string, _listener: (x: number, y: number) => void) {
+  return () => {};
 }
 
 export interface CameraStatus {
@@ -185,79 +280,63 @@ export interface CameraStatus {
   ip: string | null;
 }
 
-export function onCameraAvailable(mac: string, listener: (status: CameraStatus) => void) {
-  return subscribe<{ macAddress: string; available: boolean; ip: string | null }>(
-    'camera-available',
-    (d) => {
-      if (sameMac(d.macAddress, mac)) listener({ available: d.available, ip: d.ip });
-    }
-  );
+export function onCameraAvailable(_mac: string, listener: (status: CameraStatus) => void) {
+  // Announced once so the view renders its "no camera" state rather than
+  // sitting on a spinner forever.
+  queueMicrotask(() => listener({ available: false, ip: null }));
+  return () => {};
 }
 
-/** Relayed JPEG frames, base64. Each frame stands alone — a drop costs one frame. */
-export function onCameraFrame(listener: (jpegBase64: string) => void) {
-  return subscribe<string>('camera-frame', listener);
+export function onCameraFrame(_listener: (jpegBase64: string) => void) {
+  return () => {};
 }
 
-export function onCameraError(listener: (message: string) => void) {
-  return subscribe<{ error: string }>('camera-error', (d) => listener(d.error));
+export function onCameraError(_listener: (message: string) => void) {
+  return () => {};
+}
+
+export function startCamera(_mac: string): boolean {
+  return false;
+}
+
+export function stopCamera(_mac: string) {
+  /* nothing to stop */
+}
+
+export function sendDisplay(_mac: string, _line1: string, _line2 = ''): Promise<boolean> {
+  // False, not a throw: the composer already treats false as "no board took it"
+  // and says so, which is the truth here.
+  return Promise.resolve(false);
 }
 
 /* ── outbound ─────────────────────────────────────────────────────── */
 
-export function startCamera(mac: string): boolean {
-  if (!socket?.connected) return false;
-  socket.emit('camera-start', mac);
-  return true;
-}
-
-export function stopCamera(mac: string) {
-  socket?.connected && socket.emit('camera-stop', mac);
-}
-
 export function sendJoystick(mac: string, x: number, y: number): boolean {
-  if (!socket?.connected) return false;
-  socket.emit('joystick', { macAddress: mac, x, y });
-  return true;
+  return send({ t: 'joy', mac: normalize(mac), x, y, sq: (seq = (seq + 1) & 0xffff) });
 }
 
 export function sendCommand(mac: string, command: string, value = 1): boolean {
-  if (!socket?.connected) {
+  const ok = send({ t: 'cmd', mac: normalize(mac), command, value });
+  if (!ok) {
     // Worth a line: a dropped command looks exactly like a rover ignoring it,
     // and that ambiguity is expensive to debug from the ESP32 end.
     console.warn(`[relay] dropped "${command}" — not connected`);
-    return false;
   }
-  socket.emit('control', { macAddress: mac, command, value });
-  return true;
+  return ok;
 }
 
-/**
- * Write two lines to the rover's 16x2 LCD.
- *
- * Resolves to whether a board actually received it, not merely whether the
- * message left the browser — the difference between those two is exactly where
- * this goes wrong. A relay too old to acknowledge resolves false rather than
- * hanging.
- */
-export function sendDisplay(mac: string, line1: string, line2 = ''): Promise<boolean> {
-  if (!socket?.connected) return Promise.resolve(false);
+/** Round-trip time to the rover and back, in ms. Null if it never answers. */
+export function ping(mac: string, timeoutMs = 3000): Promise<number | null> {
+  const id = String(++seq);
+  const started = performance.now();
+  if (!send({ t: 'ping', mac: normalize(mac), id })) return Promise.resolve(null);
 
   return new Promise((resolve) => {
-    let settled = false;
-    const finish = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      resolve(ok);
-    };
-
-    socket!.emit('display', { macAddress: mac, line1, line2 }, (r: { delivered: boolean }) =>
-      finish(!!r?.delivered)
-    );
-
-    setTimeout(() => {
-      if (!settled) console.warn('[relay] display was not acknowledged — is the server current?');
-      finish(false);
-    }, 4000);
+    const off = on('pong', null, ((got: string) => {
+      if (got !== id) return;
+      off();
+      resolve(Math.round(performance.now() - started));
+    }) as Fn);
+    setTimeout(() => { off(); resolve(null); }, timeoutMs);
   });
 }

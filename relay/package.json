@@ -1,0 +1,16 @@
+{
+  "name": "rover-ws-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Low-latency WebSocket relay between the RoverAPP console and ESP32 rovers, authenticated with Supabase",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "fake": "node fake-rover.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

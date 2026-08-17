@@ -1,15 +1,22 @@
 /**
  * Where the relay lives.
  *
- * Same Mumbai host the mobile app points at (mobile/src/config.ts) — the
- * console and the phone talk to one relay, so a rover driven from a laptop and
- * a rover driven from a phone are the same rover in the same room. That file
- * carries the latency numbers behind the choice.
+ * This must be the **WebSocket relay** in `../../relay`, not the socket.io one
+ * in `../../server`. The console speaks the JSON/text protocol that relay
+ * carries and authenticates with a verified Supabase access token; pointing it
+ * at the socket.io host gets a connection that is accepted and then ignored,
+ * which looks exactly like a rover that is switched off.
  *
- * Overridable at runtime from Settings, because a rover on the bench is often
- * reachable on the LAN long before it is reachable through a cloud host.
+ * The phone (mobile/src/config.ts) still talks to the socket.io relay, so the
+ * two addresses are no longer the same. Run both if you use both.
+ *
+ * Set `VITE_RELAY_URL` to override at build time; Settings overrides it at
+ * runtime, because a rover on the bench is usually reachable on the LAN long
+ * before it is reachable through a cloud host.
  */
-export const DEFAULT_RELAY = 'https://roverapp.duckdns.org';
+export const DEFAULT_RELAY =
+  (import.meta.env.VITE_RELAY_URL as string | undefined)?.replace(/\/$/, '') ||
+  'http://localhost:8080';
 
 /** The command tokens the drive firmware answers to (rover_controller.ino). */
 export const COMMANDS = {
